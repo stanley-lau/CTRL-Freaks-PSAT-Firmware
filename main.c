@@ -6,4 +6,6 @@ int main(void) {
     WDTCTL = WDTPW + WDTHOLD;                 	// Stop watchdog timer
 
     // Intialise ADCs
+
+    //Test changes 
 }
