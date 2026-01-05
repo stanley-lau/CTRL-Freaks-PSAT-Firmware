@@ -1,6 +1,7 @@
 #include <driverlib.h>
 #include <msp430.h>
 #include <stdint.h>
+#include "util.h"
 
 int main(void) {
     WDTCTL = WDTPW + WDTHOLD;                 	// Stop watchdog timer
