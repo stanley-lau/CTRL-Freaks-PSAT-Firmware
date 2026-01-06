@@ -9,7 +9,7 @@
 // Avoid writing to TB2CTL after init
 void initCoilPWM(){
     // Setup Pins
-    P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to 1. BIT1 Corresponds to PIN1 on the Port.
+    P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to 1. (1 = Output) BIT1 Corresponds to PIN1 on the Port.
     P5SEL0 &= ~BIT1;                            // Clear BIT1 in P5SEL0. Now P5SEL0 BIT1 = 0
 	P5SEL1 |= BIT1;                             // Set BIT1 in P5SEL1. Now P5SEL1 BIT1 = 1
     // 10b = Secondary module function is selected which correspond to the timer Timer_B2.
@@ -40,7 +40,72 @@ void setCoilPWM(uint8_t duty_cyle){
     TB2CCR2 = (TB2CCR0 * duty_cyle) / 100;      // Set LOW when TB0CCR1 is reached
 }
 
+// Accl SPI pins are routed incorrectly. Cannot be resolved in software. Function written assuming routing is correctly
+// initAccl initialises SPI functionality 
+void initAccl(){
+    /*
+    Assumes:
+    P4.0 = ACCL_CS
+    P4.1 = ACCL_CLK
+    P4.2 = ACCL_MISO (SOMI) (incorrect on schematic)
+    P4.3 = ACCL_MOSI (SIMO) (incorrect on schematic)
+
+    P6.0 = ACCL_INT1
+    P2.3 = ACCL_INT2
+    */
+    
+    // Configure Pin function for ACCL by setting them to Primary Module function (CLK, SOMI, SIMO)
+    P4SEL0 |= BIT1 | BIT2 | BIT3;            // Set bit0
+    P4SEL1 &= ~(BIT1 | BIT2 | BIT3);         // Clear bit1
+
+    // Configure CS pin as GPIO
+    P4SEL0 &= ~BIT0;
+    P4SEL1 &= ~BIT0;
+    
+    // Configure CS pin as Output, and Pulling it HIGH (Active LOW)
+    P4OUT |= BIT0;                           // Pull CS High
+    P4DIR |= BIT0;                           // Set BIT0 of P4DIR to 1. (1 = Output) BIT0 Corresponds to PIN 0 on the Port.
+    
+
+    // Configure Interrupts by setting them as INPUT pins.
+    P6DIR &= ~BIT0;                         // Clear Bit 0 in P6DIR to set P6.0 as input
+    P6IES &= ~BIT0;                         // Rising edge (active HIGH)
+    P6IFG &= ~BIT0;                         // Clear flag
+    P6IE  |=  BIT0;                         // Enable interrupt
+
+    P2DIR &= ~BIT3;                         // Clear Bit 3 in P2DIR to set P2.3 as input
+    P2IES &= ~BIT3;                         // Rising edge (active HIGH)
+    P2IFG &= ~BIT3;                         // Clear flag
+    P2IE  |=  BIT3;                         // Enable interrupt
+
+    // Init SPI specifications. 
+    UCA1CTLW0 = UCSWRST;                                // Hold in RESET data to allow modification of UCA1CTLW0
+    UCA1CTLW0 |=    UCMSB   |       UCSYNC     |    UCMST;      
+    //        |= MSB First, | Synchronous mode | Master mode
+    UCA1CTLW0 |= UCSSEL__SMCLK;                         // Seledt SMCLK as Clock
+    UCA1BRW = 8;                                        // SPI CLK -> SMCLK/8 (Clock prescaler)
+    UCA1CTLW0 &= ~UCSWRST;                              // Release RESET to allow the operation of SPI module
+
+    /*
+    Notes:
+    Look to set clock phase and polarity to match the sensor's SPI timing
+    UCA1CTLW0 &= ~(UCCKPL | UCCKPH);       // CPOL = 0, CPHA = 0 -> MODE 0
+
+    To do:
+    Configure ACCL by writing to its registers
+    Configure INT behaviour on ACCL to Polarity = Active HIGH, Drive = PUSH PULL, Mode= Latched. 
+    Must be done after initAccl() via SPI writes.
+    */
+}
+
+
 int main(void) { 
+
+    /*
+    may need to write code for this init. 
+    clock_init();
+    gpio_init();
+    */
 
     // ADC Channel 
     ADCMCTL0 = ADCSREF_1 | ADCINCH_8;      // Chamber thermistor (P5.0 / A8)
