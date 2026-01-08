@@ -2,6 +2,7 @@
 #include <msp430.h>
 #include <stdint.h>
 #include "util.h"
+#include "hal/blocking_spi.hpp"
 
 #define PWM_PERIOD 500
 
