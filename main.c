@@ -17,7 +17,7 @@ void initCoilPWM(){
 
     // Setup Compare Reg
     TB2CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
-    TB2CCR2 = 0                                 // 0% duty cycle
+    TB2CCR2 = 0;                                 // 0% duty cycle
     TB2CCTL2 = OUTMOD_7;                        // Reset/Set PWM mode, refer to YT vid
     // TB2CCRn is the timer attached to Port P5 from Table 6-67
 
@@ -117,7 +117,7 @@ int main(void) {
     // Select reference 1: 001b = {VR+ = VREF and VR– = AVSS}
     // Select input channel for thermistor and sense 
 
-    ADCCTL1 |= DCDIV_2 + ADCSHP_0;               // Divide input clock by 3
+    ADCCTL1 |= ADCDIV_2 + ADCSHP_0;               // Divide input clock by 3
     // ADC Control Register 1
     // ADC clock divider. Divide 24MHz by 3 to get 8MHz (typical)
     // ADC sample-and-hold pulse-mode select. Selects sampling signal's source to be sample-input signal directly.
