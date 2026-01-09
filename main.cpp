@@ -148,19 +148,16 @@ void initADC () {
     gpio_init();
     */
 
-    PMMCTL2 = REFVSEL_2;                        // Set reference voltage to be 2.5V 
-    //Might need to turn reference on here
-    __delay_cycles(1000);
+    PMMCTL2 = REFVSEL_2 | INTREFEN_1;           // Set reference voltage to be 2.5V, then enable the internal reference. 
+    while (!(PMMCTL2 & REFGENRDY));             // Wait until V_ref is ready to be used. Previously: __delay_cycles(1000);
   
     ADCCTL1 = ADCDIV_2 | ADCSHP_0;              // Divide input clock by 3 and select source to be sample-input
 
     ADCCTL2 &= ~ADCRES;                         // Clear bits/resolution value 
    
-
     ADCCTL2 |= ADCRES_2;                        // 12-bit resolution for the conversion result
 
-    ADCIE |= ADCIE0_1;                          // Enable interrupts 
-    //ADC_enableInterrupt(ADC_BASE, ADCIE0_1);
+    ADCIE |= ADCIE0;                          // Enable interrupts 
 
     ADCCTL0 = ADCSHT_4 | ADCON;                 // sample and hold for 64 clock cycles, enable ADC.
 
@@ -171,7 +168,9 @@ void initADC () {
 
 void startADC(uint8_t channel)
 {
-    ADCCTL0 &= ADCENC_0;                // Stop ADC
+    //ADCCTL0 &= ADCENC_0;                // Stop ADC (Using "_0 / _1" can be problematic as they're meant to be assignemts)
+    ADCCTL0 &= ~ADCENC;                  // Clear the bit that enables ADC conversion. AKA stop ADC
+
     ADCMCTL0 = ADCSREF_1 | channel;     // Select input channel + reference  1: 001b = {VR+ = VREF and VR– = AVSS}
 
     ADCCTL0 |= ADCENC | ADCSC;          // Enable + start conversion
@@ -197,10 +196,10 @@ int16_t tempConversion(int16_t adcValue ) {
 	double VoltageTemp = (adcValue / ADCMAX) * VREF; 
 	
 	//calculate thermistor resistance 
-	double thermistorResistance = RESISTOR * (VREF - VoltageTemp)/ VoltageTemp;
+	double thermistorResistance = RESISTOR * (VREF - VoltageTemp)/ VoltageTemp; // Should add error checking. ie dividing by 0
 
 	//apply beta formula 
-	double invertedTemp = (1.0/T0_K) + (1.0/ BETA) * log(thermistorResistance/RTHERM);
+	double invertedTemp = (1.0/T0_K) + (1.0/ BETA) * log(thermistorResistance/RTHERM); // Log not defined. Will need to find a way to allow this without heavy resource consumption
 	double tempInKelvin = 1/invertedTemp; 
 	
 	//convert to Celsius 
@@ -210,6 +209,7 @@ int16_t tempConversion(int16_t adcValue ) {
 }
 
 int main(void) {  
+    
     initADC(); 
      
     __enable_interrupt();   
