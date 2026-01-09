@@ -121,52 +121,136 @@ void initBMP(){
     BMP_SPI.init(SpiMode::MODE_0(), ClockSource::Smclk, 1);
 }
 
-int main(void) { 
 
+/* -------------------------------ADC------------------------------- */
+
+volatile uint16_t adcResult;
+
+#define ADCMAX 4095.00 //Correlating to 12 bits
+#define VREF  2.5
+#define RESISTOR 10000
+#define BETA 3380 
+#define RTHERM 10000
+#define T0_K 298.15 //25 degrees Celsius in Kelvin 
+
+#define CURRENT_MAX 2.0   // Max current in Amps
+#define R_SENSE 0.1       // Shunt resistor in Ohms
+// Values need to be checked 
+
+#define ADC_CHAM_THERM   ADCINCH_8    // P5.0 / A8
+#define ADC_BAT_THERM    ADCINCH_10   // P5.2 / A10
+#define ADC_CUR_SENSE    ADCINCH_11   // P5.3 / A11
+
+void initADC () {
     /*
     may need to write code for this init. 
     clock_init();
     gpio_init();
     */
 
-    // ADC Channel 
-    ADCMCTL0 = ADCSREF_1 | ADCINCH_8;      // Chamber thermistor (P5.0 / A8)
-    
-    // Battery thermistor (P5.2 / A10)
-    // Current sense (P5.3 / A11)
+    PMMCTL2 = REFVSEL_2;                        // Set reference voltage to be 2.5V 
+    //Might need to turn reference on here
+    __delay_cycles(1000);
+  
+    ADCCTL1 = ADCDIV_2 | ADCSHP_0;              // Divide input clock by 3 and select source to be sample-input
 
-    // ADC Conversion Memory Control Register 
-    // Select reference 1: 001b = {VR+ = VREF and VR– = AVSS}
-    // Select input channel for thermistor and sense 
+    ADCCTL2 &= ~ADCRES;                         // Clear bits/resolution value 
+   
 
-    ADCCTL1 |= ADCDIV_2 + ADCSHP_0;               // Divide input clock by 3
-    // ADC Control Register 1
-    // ADC clock divider. Divide 24MHz by 3 to get 8MHz (typical)
-    // ADC sample-and-hold pulse-mode select. Selects sampling signal's source to be sample-input signal directly.
+    ADCCTL2 |= ADCRES_2;                        // 12-bit resolution for the conversion result
 
-    ADCCTL2 &= ~ADCRES;                         // Clear bits
-    // ADC Control Register 2 
-    // Usage of not operators to clear the resolution value 
-
-    ADCCTL2 |= ADCRES_2;                        // 12-bit resolution
-    // Sets ADC resolution, number defines resolution of the conversion result 
-
-    ADCIE |= ADCIE0_1;                            // Enable interrupts
-    // ADC Interrupt Enable Register
-    // Enable the interrupt request for a completed ADC conversion 
+    ADCIE |= ADCIE0_1;                          // Enable interrupts 
     //ADC_enableInterrupt(ADC_BASE, ADCIE0_1);
 
-    ADCCTL0 |= ADCSHT_4 + ADCON;                // sample and hold for 64 clock cycles, enable ADC.
-    // AC Control Register 0 
-    // Define number of ADCCLK cycles in sampling period -> 4 = 64 cycles 
-    // Turn ADC on 
+    ADCCTL0 = ADCSHT_4 | ADCON;                 // sample and hold for 64 clock cycles, enable ADC.
 
     __delay_cycles(100);						// Wait for reference to settle
-    // Delay for 100ms to wait for reference to settle 
 
-    PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO
-    // Power mode 5 control register 0
-    // LPMx.5 Lock Bit
+    PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO / LPMx.5 Lock Bit 
+}
 
-    
+void startADC(uint8_t channel)
+{
+    ADCCTL0 &= ADCENC_0;                // Stop ADC
+    ADCMCTL0 = ADCSREF_1 | channel;     // Select input channel + reference  1: 001b = {VR+ = VREF and VR– = AVSS}
+
+    ADCCTL0 |= ADCENC | ADCSC;          // Enable + start conversion
+}
+
+// Interrupt that read ADC memory
+    #pragma vector=ADC_VECTOR
+__interrupt void ADC_ISR(void)
+{
+    switch (__even_in_range(ADCIV, ADCIV__ADCIFG0))
+    {
+        case ADCIV__ADCIFG0:
+            adcResult = ADCMEM0;   // Read ADC result
+            LPM0_EXIT;             // Wakes up CPU
+            break;
+        default:
+            break;
     }
+}
+
+int16_t tempConversion(int16_t adcValue ) {
+	//converting adc count to voltage 
+	double VoltageTemp = (adcValue / ADCMAX) * VREF; 
+	
+	//calculate thermistor resistance 
+	double thermistorResistance = RESISTOR * (VREF - VoltageTemp)/ VoltageTemp;
+
+	//apply beta formula 
+	double invertedTemp = (1.0/T0_K) + (1.0/ BETA) * log(thermistorResistance/RTHERM);
+	double tempInKelvin = 1/invertedTemp; 
+	
+	//convert to Celsius 
+	double tempInCelsius = tempInKelvin - 273.15;
+
+	return (int16_t)tempInCelsius;
+}
+
+int main(void) {  
+    initADC(); 
+     
+    __enable_interrupt();   
+    
+    uint16_t chamThermADC;
+    uint16_t batThermADC; 
+    uint16_t curSenseADC;
+
+    P5DIR |= BIT3;                   // Set P5.3 as output
+
+    while (1)
+    {
+        // Chamber thermistor
+        startADC(ADC_CHAM_THERM);
+        LPM0;                                 //Code only continues when interrupt handler has collected all data
+        chamThermADC = adcResult;
+
+        // Battery thermistor
+        startADC(ADC_BAT_THERM);
+        LPM0;
+        batThermADC = adcResult;
+
+        // Current sense
+        startADC(ADC_CUR_SENSE);
+        LPM0;
+        curSenseADC = adcResult;        
+        double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
+        if (current > CURRENT_MAX) {
+            P5OUT &= ~BIT3;              // Turn off current (port 5, pin 3) if it exceeds a value 
+        } else {
+            P5OUT |= BIT3;               // Turns back on if current return to a safe low value
+        }
+    
+
+        // Convert temperatures
+        int16_t chamTempC = tempConversion(chamThermADC);
+        int16_t batTempC  = tempConversion(batThermADC);
+
+        // Set sampling frequency
+        __delay_cycles(800000);   // 10 Hz sampling
+        // For 8 MHz: Delay cycles: 800000 = 10Hz, 80000 = 100Hz, 8000000 = 1Hz
+    }
+
+}
