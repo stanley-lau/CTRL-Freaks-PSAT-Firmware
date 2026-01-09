@@ -121,6 +121,16 @@ void initBMP(){
     BMP_SPI.init(SpiMode::MODE_0(), ClockSource::Smclk, 1);
 }
 
+void configureBMP(){
+    BMP_CS.setLow();
+        BMP_SPI.writeByte(0x1B);   // register address (write)  "0x1B" = "0001 1011". To the BMP390, this means PWR_CTRL Register
+        BMP_SPI.writeByte(0x33);   // register value --> 00110011 --> (right to left: enable pressure sensor, enable temperature sensor, 0,0 normal mode, 0, 0)
+        BMP_SPI.flush();
+    BMP_CS.setHigh();
+
+    // To Do: Continue to go through pseudocode code and BMP390L datasheet.
+}
+
 
 /* -------------------------------ADC------------------------------- */
 
