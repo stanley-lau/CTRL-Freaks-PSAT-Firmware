@@ -2,9 +2,18 @@
 #include <msp430.h>
 #include <stdint.h>
 #include "util.h"
+
+#include "hal/gpio.hpp"
 #include "hal/blocking_spi.hpp"
 
 #define PWM_PERIOD 500
+
+// Templates for BMP 
+Pin<P4,4> BMP_CS;
+Pin<P4,5> BMP_CLK;
+Pin<P4,6> BMP_MOSI;
+Pin<P4,7> BMP_MISO;
+SpiMaster<SPI_B1> BMP_SPI;
 
 // initCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
@@ -99,6 +108,18 @@ void initAccl(){
     */
 }
 
+
+void initBMP(){
+    // Configure GPIO for SPI mode
+    BMP_MOSI.function(PinFunction::Primary);
+    BMP_MISO.function(PinFunction::Primary);
+    BMP_CLK.function(PinFunction::Primary);
+    BMP_CS.toOutput().setHigh(); // Chip select
+    gpioUnlock();
+
+    // Initialise BMP's SPI
+    BMP_SPI.init(SpiMode::MODE_0(), ClockSource::Smclk, 1);
+}
 
 int main(void) { 
 
