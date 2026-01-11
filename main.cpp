@@ -125,40 +125,40 @@ void configureBMP(){
     bool dataReadyInterrupt = false;
     bool pressureDataReady  = false;
     
-    uint8_t intStatus;
+    uint8_t intStatus;  
     uint8_t status;
 
     // "INT_CTRL" register
     BMP_CS.setLow();
-        BMP_SPI.writeByte(0x19); 
+        BMP_SPI.writeByte(0x19 & 0x7F);         // AND-ing reg 0x19 with 0x7F forces bit 7 = 0, indicating a write operation.
         BMP_SPI.writeByte(0x76);   // 0111 0110 --> (right to left: push-pull, active_high INT pin, enable latching, disable FIFO watermark, enable FIFO interrupt, barometer interrupt pin high, enable temperature/pressure data ready) 
         BMP_SPI.flush();
     BMP_CS.setHigh();
     
     // "IF_CONF" register
     BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1A);   
+        BMP_SPI.writeByte(0x1A & 0x7F);   
         BMP_SPI.writeByte(0x00);   // bit0 = 0 --> SPI 4-wire mode
         BMP_SPI.flush();
     BMP_CS.setHigh();
 
     // "PWR_CTRL" register
     BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1B);   // register address (write)  "0x1B" = "0001 1011". To the BMP390, this means PWR_CTRL Register
+        BMP_SPI.writeByte(0x1B & 0x7F);   // register address (write)  "0x1B" = "0001 1011". To the BMP390, this means PWR_CTRL Register
         BMP_SPI.writeByte(0x31);   // register value --> 0011 0001 --> (right to left: enable pressure sensor, disable temperature sensor, 0,0 normal mode, 0, 0)
         BMP_SPI.flush();
     BMP_CS.setHigh();
 
     // "OSR" register
     BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1C);   
+        BMP_SPI.writeByte(0x1C & 0x7F);   
         BMP_SPI.writeByte(0x03);   // 0000 0011 --> 8x oversampling pressure measurement
         BMP_SPI.flush();
     BMP_CS.setHigh();
 
     // "ODR" register
     BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1D);   
+        BMP_SPI.writeByte(0x1D & 0x7F);   
         BMP_SPI.writeByte(0x02);   // 0x02 --> 20ms sampling period
         BMP_SPI.flush();
     BMP_CS.setHigh();
