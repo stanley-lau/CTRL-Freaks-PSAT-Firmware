@@ -37,7 +37,7 @@ void initCoilPWM(){
 }
 
 // setCoilPWM sets the duty_cyle for the coil.
-void setCoilPWM(uint8_t duty_cyle){
+void setCoilPWM(uint8_t duty_cycle){
     // PWM Coil P5.1 on schematic. 
     // duty_cyle must be a positive integer between 0 and 100;
     // SMCLK is used at 1Mhz
@@ -47,7 +47,11 @@ void setCoilPWM(uint8_t duty_cyle){
     }
     
     // Update Duty cycle.
-    TB2CCR2 = (TB2CCR0 * duty_cyle) / 100;      // Set LOW when TB0CCR1 is reached
+    if (duty_cyle >= 100) {
+        TB2CCR2 = TB2CCR0 + 1; // force always-high
+    } else {
+        TB2CCR2 = (TB2CCR0 * duty_cycle) / 100;     // // Set LOW when TB0CCR1 is reached
+    }
 }
 
 // Accl SPI pins are routed incorrectly. Cannot be resolved in software. Function written assuming routing is correctly
@@ -171,7 +175,7 @@ void configureBMP(){
     BMP_CS.setHigh();
 
     // Checking for data ready interrupt in the INT_STATUS register
-    if (intStatus & (1 << 3)) {
+    if (intStatus & (1 << 3)) {           // 1<<3  == 0000 1000
         dataReadyInterrupt = true;
     }
     
