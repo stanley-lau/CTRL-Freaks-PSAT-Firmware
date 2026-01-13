@@ -125,12 +125,26 @@ void initBMP(){
     BMP_SPI.init(SpiMode::MODE_0(), ClockSource::Smclk, 1);
 }
 
-void configureBMP(){
-    bool dataReadyInterrupt = false;
-    bool pressureDataReady  = false;
-    
-    uint8_t intStatus;  
-    uint8_t status;
+// ----------------------- Jenny's BMP code  -----------------------
+bool dataReadyInterrupt = false;
+bool pressureDataReady  = false;
+
+enum FlightState {PREFLIGHT, FLIGHT, LANDED };
+FlightState flightState = PREFLIGHT;
+
+float groundPressure = 0.0f;
+float altitude       = 0.0f;
+float prevAltitude   = 0.0f;
+
+// thresholds
+#define LAUNCH_VEL_THRESH  5.0f    // m/s upward
+#define LAND_VEL_THRESH    0.3f    // m/s
+#define LAND_ALT_THRESH    5.0f    // meters
+
+void configureBMP(){  
+    dataReadyInterrupt = false;     // Flags are cleared every time function is called. 
+    pressureDataReady  = false;
+
 
     // "INT_CTRL" register
     BMP_CS.setLow();
@@ -162,21 +176,26 @@ void configureBMP(){
 
     // "ODR" register
     BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1D & 0x7F);   
+        BMP_SPI.writeByte(0x1D & 0x7F);  
         BMP_SPI.writeByte(0x02);   // 0x02 --> 20ms sampling period
         BMP_SPI.flush();
     BMP_CS.setHigh();
+}
+
+void updateBMPStatus (void) {
+    uint8_t intStatus;  
+    uint8_t status;
 
     // "INT_STATUS" register 
     BMP_CS.setLow();
-        BMP_SPI.writeByte(0x11 | 0x80);   // Reading register. Register is cleared.
+        BMP_SPI.writeByte(0x11 | 0x80);   // ORing with 0x08 forces bit 7 = 1 --> reading register mode. Register is cleared.
         intStatus = BMP_SPI.readByte();   // Sends dummy byte to clock data out
         BMP_SPI.flush();
     BMP_CS.setHigh();
 
     // Checking for data ready interrupt in the INT_STATUS register
     if (intStatus & (1 << 3)) {           // 1<<3  == 0000 1000
-        dataReadyInterrupt = true;
+        dataReadyInterrupt = true;        // Currently unused
     }
     
     // "STATUS" register 
@@ -190,6 +209,95 @@ void configureBMP(){
     if (status & (1 << 5)) {
         pressureDataReady = true;
     }
+}
+
+uint32_t readRawPressure()
+{
+    uint8_t data0, data1, data2;
+
+    BMP_CS.setLow();
+    BMP_SPI.writeByte(0x04 | 0x80);      // start at DATA_0. Pressure data is stored from 0x04 to 0x06
+        data0 = BMP_SPI.readByte();      // Reading 0x04, PRESS_XLSB
+        data1 = BMP_SPI.readByte();      // Reading 0x05, PRESS_LSB
+        data2 = BMP_SPI.readByte();      // Reading 0x06, PRESS_MSB
+    BMP_SPI.flush();
+    BMP_CS.setHigh();
+
+    return ((uint32_t)data2 << 16) | ((uint32_t)data1 << 8) | data0; 
+}
+
+float pressureToAltitude(float pressure, float p0)
+{
+    return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula 
+}
+
+float calibrateGroundPressure(uint16_t samples)
+{
+    float sum = 0.0f;
+    uint16_t collected = 0;
+
+    // Rereads the status register and refreshes data every time 
+    while (collected < samples) {
+        updateBMPStatus();
+
+        if (pressureDataReady) {
+            sum += (float)readRawPressure();
+            collected++;
+        }
+    }
+
+    return sum / samples;  // Return average of 100 samples 
+}
+
+
+FlightState updateFlightState(FlightState state, float altitude, float prevAltitude, float dt)
+{
+    float velocity = (altitude - prevAltitude) / dt;
+
+    switch (state) {
+        case PREFLIGHT:
+            if (velocity > LAUNCH_VEL_THRESH)
+                return FLIGHT;
+            break;
+
+        case FLIGHT:
+            if (fabsf(velocity) < LAND_VEL_THRESH && altitude < LAND_ALT_THRESH)
+                return LANDED;
+            break;
+
+        case LANDED:
+            break;
+    }
+
+    return state;
+}
+
+void setup()
+{
+    configureBMP();                                 //Configure once at start
+
+    do {
+        updateBMPStatus();
+    } while (!pressureDataReady);                   // Keeps refreshing and reading STATUS until we get flag pressureDataReady.
+
+    groundPressure = calibrateGroundPressure(100);  // Gets 100 samples 
+    altitude = 0.0f;
+    prevAltitude = 0.0f;
+}
+
+void loop(float dt)
+{
+   updateBMPStatus();             // refresh flags
+
+    if (!pressureDataReady)
+        return;
+
+    float pressure = (float)readRawPressure();
+    altitude = pressureToAltitude(pressure, groundPressure);
+
+    flightState = updateFlightState(flightState, altitude, prevAltitude, dt);
+
+    prevAltitude = altitude;
 }
 
 
