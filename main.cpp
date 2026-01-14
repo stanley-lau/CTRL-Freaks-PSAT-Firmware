@@ -219,6 +219,9 @@ void updateBMPStatus (void) {
         data_ready_interrupt = true;        // Currently unused
     }
     
+
+    /* I can't find a reason to read this in the datasheet. Except for the fact that it tells us that pressure sensor data is ready. */
+
     // "STATUS" register 
     BMP_CS.setLow();
         BMP_SPI.writeByte(0x03 | 0x80);   // Reading STATUS
@@ -237,9 +240,8 @@ void updateBMPStatus (void) {
 
 
 // FIX to read fom 0x05, and 0x06
-// REFER to BMP390L data sheet, sect.3.10 Data Readout from data registers.
-uint32_t readRawPressure()
-{
+// REFER to BMP390L data sheet, sect.3.10 Data Readout from data registers - Having to burst read to ensure reliability
+uint32_t readRawPressure(){
     uint8_t data0, data1, data2;
 
     BMP_CS.setLow();
@@ -253,15 +255,45 @@ uint32_t readRawPressure()
     return ((uint32_t)data2 << 16) | ((uint32_t)data1 << 8) | data0; 
 }
 
+
+
+/* bmpReadSample() ...
+    - combines updateBMPStatus() and readRawPressure into one function()
+    - should be called in main() when the variable "bmp_data_ready" is = true;
+    - clears the INT_STATUS register by reading from it
+    - Reads 6 consecutive registers (Press + temp)
+    - Should store the data somewhere
+*/
+
+void bmpReadSample(){
+    // Clear BMP's interrupt flag by reading from it.
+    BMP_CS.setLow();
+        BMP_SPI.writeByte(0x11 | 0x80);   // ORing with 0x08 forces bit 7 = 1 --> reading register mode. Register is cleared.
+        int_status = BMP_SPI.readByte();   // Sends dummy byte to clock data out
+        BMP_SPI.flush();
+    BMP_CS.setHigh();
+
+    // Read from pressure sensor + temperature sensor
+    uint8_t buf[6];
+    BMP_CS.setLow();
+        BMP_SPI.writeByte(0x04 | 0x80); // PRESSURE_XL
+        for(int i = 0; i < 6; i++){
+            buf[i] = BMP_SPI.readByte();
+        }
+        BMP_SPI.flush();
+    BMP_CS.setHigh();
+    // bmpData.pressure = (buf[2]<<16) | (buf[1]<<8) | buf[0];
+    // bmpData.pressure = (buf[5]<<16) | (buf[4]<<8) | buf[3];
+    // Find a way to store data whether that be locally or globally.
+}
+
 // powf undefined - against using math.h
 // p0? being ground pressure?
-float pressureToAltitude(float pressure, float p0)
-{
+float pressureToAltitude(float pressure, float p0){
     return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula 
 }
 
-float calibrateGroundPressure(uint16_t samples)
-{
+float calibrateGroundPressure(uint16_t samples){
     float sum = 0.0f;
     uint16_t collected = 0;
 
@@ -279,8 +311,7 @@ float calibrateGroundPressure(uint16_t samples)
 }
 
 
-FlightState updateFlightState(FlightState state, float altitude, float prev_altitude, float dt)
-{
+FlightState updateFlightState(FlightState state, float altitude, float prev_altitude, float dt){
     float velocity = (altitude - prev_altitude) / dt;
 
     switch (state) {
@@ -301,8 +332,7 @@ FlightState updateFlightState(FlightState state, float altitude, float prev_alti
     return state;
 }
 
-void setup()
-{
+void setup(){
     configureBMP();                                 //Configure once at start
 
     do {
@@ -316,8 +346,7 @@ void setup()
 
 
 // ????
-void loop(float dt)
-{
+void loop(float dt){
    updateBMPStatus();             // refresh flags
 
     if (!pressure_data_ready)
