@@ -163,7 +163,7 @@ void configureBMP(){
     // "PWR_CTRL" register
     BMP_CS.setLow();
         BMP_SPI.writeByte(0x1B & 0x7F);   // register address (write)  "0x1B" = "0001 1011". To the BMP390, this means PWR_CTRL Register
-        BMP_SPI.writeByte(0x31);   // register value --> 0011 0001 --> (right to left: enable pressure sensor, disable temperature sensor, 0,0 normal mode, 0, 0)
+        BMP_SPI.writeByte(0x33);   // register value --> 0011 0011 --> (right to left: enable pressure sensor, enable temperature sensor, 0,0 normal mode (11), 0, 0)
         BMP_SPI.flush();
     BMP_CS.setHigh();
 
@@ -211,6 +211,8 @@ void updateBMPStatus (void) {
     }
 }
 
+
+// FIX to read fom 0x05, and 0x06
 uint32_t readRawPressure()
 {
     uint8_t data0, data1, data2;
@@ -226,6 +228,8 @@ uint32_t readRawPressure()
     return ((uint32_t)data2 << 16) | ((uint32_t)data1 << 8) | data0; 
 }
 
+// powf undefined - against using math.h
+// p0? being ground pressure?
 float pressureToAltitude(float pressure, float p0)
 {
     return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula 
@@ -285,6 +289,8 @@ void setup()
     prevAltitude = 0.0f;
 }
 
+
+// ????
 void loop(float dt)
 {
    updateBMPStatus();             // refresh flags
