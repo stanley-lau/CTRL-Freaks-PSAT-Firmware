@@ -14,6 +14,22 @@ Pin<P4,5> BMP_CLK;
 Pin<P4,6> BMP_MOSI;
 Pin<P4,7> BMP_MISO;
 SpiMaster<SPI_B1> BMP_SPI;
+Pin<P2,4> BMP_INT;
+
+// ==== Interrupts ==== //
+
+// BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code will run.
+volatile bool bmpDataReady = false;
+
+#pragma vector=PORT6_VECTOR
+__interrupt void PORT6_ISR(void)
+{
+    if (P2IFG & BIT4) {                     // if Bit4 on Port2 is set (BMP_INT)
+        bmpDataReady = true;                // Signal main loop
+        P2IFG &= ~BIT4;                     // MUST clear flag
+    }
+}
+
 
 // initCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
@@ -83,7 +99,7 @@ void initAccl(){
 
     // Configure Interrupts by setting them as INPUT pins.
     P6DIR &= ~BIT0;                         // Clear Bit 0 in P6DIR to set P6.0 as input
-    P6IES &= ~BIT0;                         // Rising edge (active HIGH)
+    P6IES &= ~BIT0;                         // Rising edge trigger (active HIGH)
     P6IFG &= ~BIT0;                         // Clear flag
     P6IE  |=  BIT0;                         // Enable interrupt
 
@@ -119,10 +135,15 @@ void initBMP(){
     BMP_MISO.function(PinFunction::Primary);
     BMP_CLK.function(PinFunction::Primary);
     BMP_CS.toOutput().setHigh(); // Chip select
+
+    // Enable BMP interupts;
+    BMP_INT.toOutput().risingEdgeTrigger().enableInterrupt()
+
     gpioUnlock();
 
     // Initialise BMP's SPI
     BMP_SPI.init(SpiMode::MODE_0(), ClockSource::Smclk, 1);
+
 }
 
 // ----------------------- Jenny's BMP code  -----------------------
