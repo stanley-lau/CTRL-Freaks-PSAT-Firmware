@@ -19,13 +19,13 @@ Pin<P2,4> BMP_INT;
 // ==== Interrupts ==== //
 
 // BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code will run.
-volatile bool bmpDataReady = false;
+volatile bool bmp_data_ready = false;
 
 #pragma vector=PORT6_VECTOR
 __interrupt void PORT6_ISR(void)
 {
     if (P2IFG & BIT4) {                     // if Bit4 on Port2 is set (BMP_INT)
-        bmpDataReady = true;                // Signal main loop
+        bmp_data_ready = true;                // Signal main loop
         P2IFG &= ~BIT4;                     // MUST clear flag
     }
 }
@@ -147,15 +147,15 @@ void initBMP(){
 }
 
 // ----------------------- Jenny's BMP code  -----------------------
-bool dataReadyInterrupt = false;
-bool pressureDataReady  = false;
+bool data_ready_interrupt = false;
+bool pressure_data_ready  = false;
 
 enum FlightState {PREFLIGHT, FLIGHT, LANDED };
 FlightState flightState = PREFLIGHT;
 
-float groundPressure = 0.0f;
+float ground_pressure = 0.0f;
 float altitude       = 0.0f;
-float prevAltitude   = 0.0f;
+float prev_altitude   = 0.0f;
 
 // thresholds
 #define LAUNCH_VEL_THRESH  5.0f    // m/s upward
@@ -163,8 +163,8 @@ float prevAltitude   = 0.0f;
 #define LAND_ALT_THRESH    5.0f    // meters
 
 void configureBMP(){  
-    dataReadyInterrupt = false;     // Flags are cleared every time function is called. 
-    pressureDataReady  = false;
+    data_ready_interrupt = false;     // Flags are cleared every time function is called. 
+    pressure_data_ready  = false;
 
 
     // "INT_CTRL" register
@@ -204,19 +204,19 @@ void configureBMP(){
 }
 
 void updateBMPStatus (void) {
-    uint8_t intStatus;  
+    uint8_t int_status;  
     uint8_t status;
 
     // "INT_STATUS" register 
     BMP_CS.setLow();
         BMP_SPI.writeByte(0x11 | 0x80);   // ORing with 0x08 forces bit 7 = 1 --> reading register mode. Register is cleared.
-        intStatus = BMP_SPI.readByte();   // Sends dummy byte to clock data out
+        int_status = BMP_SPI.readByte();   // Sends dummy byte to clock data out
         BMP_SPI.flush();
     BMP_CS.setHigh();
 
     // Checking for data ready interrupt in the INT_STATUS register
-    if (intStatus & (1 << 3)) {           // 1<<3  == 0000 1000
-        dataReadyInterrupt = true;        // Currently unused
+    if (int_status & (1 << 3)) {           // 1<<3  == 0000 1000
+        data_ready_interrupt = true;        // Currently unused
     }
     
     // "STATUS" register 
@@ -228,12 +228,16 @@ void updateBMPStatus (void) {
 
     // Checking if pressure sensor data is ready 
     if (status & (1 << 5)) {
-        pressureDataReady = true;
+        pressure_data_ready = true;
+    }
+    if (status & (1 << 5)){
+        
     }
 }
 
 
 // FIX to read fom 0x05, and 0x06
+// REFER to BMP390L data sheet, sect.3.10 Data Readout from data registers.
 uint32_t readRawPressure()
 {
     uint8_t data0, data1, data2;
@@ -265,7 +269,7 @@ float calibrateGroundPressure(uint16_t samples)
     while (collected < samples) {
         updateBMPStatus();
 
-        if (pressureDataReady) {
+        if (pressure_data_ready) {
             sum += (float)readRawPressure();
             collected++;
         }
@@ -275,9 +279,9 @@ float calibrateGroundPressure(uint16_t samples)
 }
 
 
-FlightState updateFlightState(FlightState state, float altitude, float prevAltitude, float dt)
+FlightState updateFlightState(FlightState state, float altitude, float prev_altitude, float dt)
 {
-    float velocity = (altitude - prevAltitude) / dt;
+    float velocity = (altitude - prev_altitude) / dt;
 
     switch (state) {
         case PREFLIGHT:
@@ -303,11 +307,11 @@ void setup()
 
     do {
         updateBMPStatus();
-    } while (!pressureDataReady);                   // Keeps refreshing and reading STATUS until we get flag pressureDataReady.
+    } while (!pressure_data_ready);                   // Keeps refreshing and reading STATUS until we get flag pressureDataReady.
 
-    groundPressure = calibrateGroundPressure(100);  // Gets 100 samples 
+    ground_pressure = calibrateGroundPressure(100);  // Gets 100 samples 
     altitude = 0.0f;
-    prevAltitude = 0.0f;
+    prev_altitude = 0.0f;
 }
 
 
@@ -316,15 +320,15 @@ void loop(float dt)
 {
    updateBMPStatus();             // refresh flags
 
-    if (!pressureDataReady)
+    if (!pressure_data_ready)
         return;
 
     float pressure = (float)readRawPressure();
-    altitude = pressureToAltitude(pressure, groundPressure);
+    altitude = pressureToAltitude(pressure, ground_pressure);
 
-    flightState = updateFlightState(flightState, altitude, prevAltitude, dt);
+    flightState = updateFlightState(flightState, altitude, prev_altitude, dt);
 
-    prevAltitude = altitude;
+    prev_altitude = altitude;
 }
 
 
