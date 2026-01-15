@@ -119,7 +119,7 @@ void setCoilPWM(uint8_t duty_cycle){
 
 // Accl SPI pins are routed incorrectly. Cannot be resolved in software. Function written assuming routing is correctly
 // initAccl initialises SPI functionality 
-void initAccl(){
+void initACCL(){
     /*
     Assumes:
     P4.0 = ACCL_CS
@@ -175,6 +175,66 @@ void initAccl(){
     */
 }
 
+void configureACCL(){
+    //INT_CONFIG register
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x06 & 0x7F);  // Bit 7 (MSB) = 0 --> write mode 
+        ACCL_SPI.writeByte(0x3F);         // = 0011 1111 = INT1: active high, push-pull, latched, INT2: active high, push-pull, latched
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
+    __delay_cycles(500);                  // Small safety delay
+
+    //INT_SOURCE0 register
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x2B & 0x7F);   
+        ACCL_SPI.writeByte(1 << 3);       // Make bit 3 = 1 --> Data ready interrupt routed to INT1
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
+    __delay_cycles(500);          
+
+    // Enable WOM logic
+    BLK_SEL_W = 0x00;       // MREG1
+    MADDR_W  = 0x0F;        // WOM control register address
+    M_W      = 0x40;        // Enable WOM (example value for now) 
+    __delay_us(10);         // Wait 10 µs
+    BLK_SEL_W = 0x00;       // Set after completing MREG1 access (deselecting)   
+
+    //INT_SOURCE4 register
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x2E & 0x7F);   
+        ACCL_SPI.writeByte((1 << 0) | (1 << 1) | (1 << 2));       // Make bit 0, 1, 2 = 1 --> X, Y, Z axis WOM routed to INT2
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
+    __delay_cycles(500);
+
+    //INT_CONFIG0 register
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x04 & 0x7F);   
+        ACCL_SPI.writeByte((1 << 5) | (0 << 4));       // Make bit 5 = 1, bit 4 = 0 --> Data ready interrupt cleared on sensor register read
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
+    __delay_cycles(500);
+}
+
+volatile bool ACCLReadyFlag = false;
+
+void UpdateACCLStatus() {
+    uint8_t int_status_drdys;
+
+    // "INT_STATUS_DRDYS" register 
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x39 | 0x80);    // ORing with 0x08 forces bit 7 = 1 --> reading register mode. Register is cleared.
+        int_status = ACCL_SPI.readByte();   // Sends dummy byte to clock data out
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
+
+    // Checking for data ready interrupt in the INT_STATUS register
+    if (int_status_drdys & (1 << 0)) {      // Bit 0 is automatically sets to 1 when a Data Ready interrupt is generated
+        ACCLReadyFlag = true;               // Data is ready. After register has been read, bit 0 is set to 0. 
+    }
+}
+
+// Need to write code here to read ACCL data 
 
 void initBMP(){
     // Configure GPIO for SPI mode
@@ -197,19 +257,15 @@ void initBMP(){
 bool data_ready_interrupt = false;
 bool pressure_data_ready  = false;
 
-
 // Initialise enums;
 enum FlightState {PREFLIGHT, FLIGHT, LANDED };
 // Create variable "current_flight_state" of type "FlightState", and set to "PREFLIGHT"
 enum FlightState current_flight_state = PREFLIGHT;
-enum FlightState prev_flight_state; // Added for redundancy checks. IDLE state occurs when Preflight checks are DONE, and FLIGHT hasn't begun. This Preflight inits from looping again and again.
 
 float ground_pressure = 0.0f;
 float intial_altitude = 0.0f;
 float current_altitude = 0.0f;
 float prev_altitude   = 0.0f;
-
-
 
 void configureBMP(){  
     data_ready_interrupt = false;     // Flags are cleared every time function is called. 
@@ -445,23 +501,6 @@ void setupBMP(){
     intial_altitude = pressureToAltitude(float ground_pressure); 
 }
 
-
-// ????
-void loop(float dt){
-   updateBMPStatus();             // refresh flags
-
-    if (!pressure_data_ready)
-        return;
-
-    float pressure = (float)readRawPressure();
-    altitude = pressureToAltitude(pressure); // Ground pressure added a additional function call
-
-    flightState = updateFlightState(flightState, altitude, prev_altitude, dt);
-
-    prev_altitude = altitude;
-}
-
-
 /* -------------------------------ADC------------------------------- */
 
 volatile uint16_t adcResult;
@@ -516,22 +555,94 @@ void startADC(uint8_t channel)
     ADCCTL0 |= ADCENC | ADCSC;          // Enable + start conversion
 }
 
-int16_t tempConversion(int16_t adcValue ) {
+int16_t TempConversion(int16_t adcValue ) {
 	//converting adc count to voltage 
 	double VoltageTemp = (adcValue / ADCMAX) * VREF; 
 	
 	//calculate thermistor resistance 
-	double thermistorResistance = RESISTOR * (VREF - VoltageTemp)/ VoltageTemp; // Should add error checking. ie dividing by 0
+	double ThermistorResistance = RESISTOR * (VREF - VoltageTemp)/ VoltageTemp; // Should add error checking. ie dividing by 0
 
 	//apply beta formula 
-	double invertedTemp = (1.0/T0_K) + (1.0/ BETA) * log(thermistorResistance/RTHERM); // Log not defined. Will need to find a way to allow this without heavy resource consumption
-	double tempInKelvin = 1/invertedTemp; 
+	double InvertedTemp = (1.0/T0_K) + (1.0/ BETA) * log(ThermistorResistance/RTHERM); // Log not defined. Will need to find a way to allow this without heavy resource consumption
+	double TempInKelvin = 1/InvertedTemp; 
 	
 	//convert to Celsius 
-	double tempInCelsius = tempInKelvin - 273.15;
+	double TempInCelsius = TempInKelvin - 273.15;
 
-	return (int16_t)tempInCelsius;
+	return (int16_t)TempInCelsius;
 }
+
+int16_t ChamberTemp ()
+{
+    __enable_interrupt();
+
+    uint16_t chamThermADC;
+
+    while (1)
+    {
+        // Chamber thermistor
+        startADC(ADC_CHAM_THERM);
+        LPM0;                                 //Code only continues when interrupt handler has collected all data
+        chamThermADC = adcResult;
+
+        // Convert temperatures
+        return TempConversion(chamThermADC);
+
+        // Set sampling frequency
+        __delay_cycles(800000);   // 10 Hz sampling
+    }
+
+}
+
+int16_t BatteryTemp ()
+{
+    __enable_interrupt();
+
+    uint16_t batThermADC;
+
+    while (1)
+    {
+        // Battery thermistor
+        startADC(ADC_BAT_THERM);
+        LPM0;
+        batThermADC = adcResult;
+
+        return TempConversion(batThermADC);
+
+        __delay_cycles(800000);   // 10 Hz sampling
+    }
+
+
+}
+
+double CurrentSense ()
+{
+    __enable_interrupt();   
+
+    uint16_t curSenseADC;
+
+    while (1)
+    {
+        // Current sense
+        startADC(ADC_CUR_SENSE);
+        LPM0;
+        curSenseADC = adcResult;        
+        return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
+
+        __delay_cycles(800000);   // 10 Hz sampling
+    }
+}
+
+// Should move this inside recoverymode()
+    // Testing current 
+    P5DIR |= BIT3;                       // Set P5.3 as output
+    double current = CurrentSense ();
+    if (current > CURRENT_MAX) {
+            P5OUT &= ~BIT3;              // Turn off current (port 5, pin 3) if it exceeds a value 
+        } else {
+            P5OUT |= BIT3;               // Turns back on if current return to a safe low value
+        }
+
 
 
 /*
@@ -545,14 +656,15 @@ int main(void) {
     initADC();
     initCoilPWM();
 
-    initAccl();
+    initACCL();
+    configureACCL();
 
     initBMP();
     configureBMP();
 
+    // LoRa to ensure init was done succesfully 
+
     __enable_interrupt(); 
-
-
 
     while(1){
         /*
@@ -568,68 +680,26 @@ int main(void) {
         switch (current_flight_state) {
             case PREFLIGHT:
                 break;
-            case IDLE:
-                break;
             case FLIGHT:
                 break;
             case LANDED:
                 break;
         }
     }
+}
 
 
+// ------------ After landing ------------
 
+void vapeLoop () 
+{
+    //Turn PWM on (set coil PWM @ X value)
+    setCoilPWM(100);
 
+    __delay_cycles(100); 
 
+    //Turn PWM off (set coil PWM @ 0)
+    setCoilPWM(0);
 
-
-
-
-
-
-
-
-
-
-
-    
-    uint16_t chamThermADC;
-    uint16_t batThermADC; 
-    uint16_t curSenseADC;
-
-    P5DIR |= BIT3;                   // Set P5.3 as output
-
-    while (1)
-    {
-        // Chamber thermistor
-        startADC(ADC_CHAM_THERM);
-        LPM0;                                 //Code only continues when interrupt handler has collected all data
-        chamThermADC = adcResult;
-
-        // Battery thermistor
-        startADC(ADC_BAT_THERM);
-        LPM0;
-        batThermADC = adcResult;
-
-        // Current sense
-        startADC(ADC_CUR_SENSE);
-        LPM0;
-        curSenseADC = adcResult;        
-        double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
-        if (current > CURRENT_MAX) {
-            P5OUT &= ~BIT3;              // Turn off current (port 5, pin 3) if it exceeds a value 
-        } else {
-            P5OUT |= BIT3;               // Turns back on if current return to a safe low value
-        }
-    
-
-        // Convert temperatures
-        int16_t chamTempC = tempConversion(chamThermADC);
-        int16_t batTempC  = tempConversion(batThermADC);
-
-        // Set sampling frequency
-        __delay_cycles(800000);   // 10 Hz sampling
-        // For 8 MHz: Delay cycles: 800000 = 10Hz, 80000 = 100Hz, 8000000 = 1Hz
-    }
-
+    __delay_cycles(100);
 }
