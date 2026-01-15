@@ -20,7 +20,12 @@
 #define g_0 9.80665             // Gravity constant
 #define M 0.0289644             // Molar Mass of Earth's Air [kg/mol]
 
-// Circular buffer size
+// BMP threshold values
+#define LAUNCH_VEL_THRESH  5.0f    // [m/s] upward
+#define LAND_VEL_THRESH    0.3f    // [m/s]
+#define LAND_ALT_THRESH    5.0f    // [m]
+
+// Circular buffer size for BMP
 #define BMP_BUFFER_SIZE 32
 
 // Struct for storing data
@@ -57,6 +62,21 @@ __interrupt void PORT2_ISR(void)
     }
 }
 
+
+// ADC Interrupt: interrupt that read ADC memory
+    #pragma vector=ADC_VECTOR
+__interrupt void ADC_ISR(void)
+{
+    switch (__even_in_range(ADCIV, ADCIV__ADCIFG0))
+    {
+        case ADCIV__ADCIFG0:
+            adcResult = ADCMEM0;   // Read ADC result
+            LPM0_EXIT;             // Wakes up CPU
+            break;
+        default:
+            break;
+    }
+}
 
 // initCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
@@ -177,18 +197,19 @@ void initBMP(){
 bool data_ready_interrupt = false;
 bool pressure_data_ready  = false;
 
-enum FlightState {PREFLIGHT, FLIGHT, LANDED };
-FlightState flightState = PREFLIGHT;
+
+// Initialise enums;
+enum FlightState {PREFLIGHT, IDLE, FLIGHT, LANDED };
+// Create variable "current_flight_state" of type "FlightState", and set to "PREFLIGHT"
+enum FlightState current_flight_state = PREFLIGHT;
+enum FlightState prev_flight_state = IDLE; // Added for redundancy checks. IDLE state occurs when Preflight checks are DONE, and FLIGHT hasn't begun. This Preflight inits from looping again and again.
 
 float ground_pressure = 0.0f;
 float intial_altitude = 0.0f;
 float current_altitude = 0.0f;
 float prev_altitude   = 0.0f;
 
-// thresholds
-#define LAUNCH_VEL_THRESH  5.0f    // m/s upward
-#define LAND_VEL_THRESH    0.3f    // m/s
-#define LAND_ALT_THRESH    5.0f    // meters
+
 
 void configureBMP(){  
     data_ready_interrupt = false;     // Flags are cleared every time function is called. 
@@ -375,7 +396,34 @@ FlightState updateFlightState(FlightState state, float altitude, float prev_alti
 
     return state;
 }
+/*
+    Modified from updateFlightState();
+    This code should ultilse BOTH sensor's readings to determine the state 
+*/
+void updateFlightStateV2(){
+    switch (current_flight_state) {
+        case PREFLIGHT:
+            // do nothing (for now)?
+            break;
 
+        case IDLE:
+            // if current altitudee jumps from ground altitude AND ACCL > 0;
+                // if prev_flight_state != landed AND != FLIGHT
+                    // current_flight = FLIGHT;
+                    // prev_flight_state = IDLE;
+            break;
+
+        case FLIGHT:
+            // if current altitude and subsequence altitudes are ~= ground altitude AND accl ~ 0
+                // current_flight_state = LANDED;
+                // prev_flight_state = FLIGHT;
+            break;
+
+        case LANDED:
+            // do nothing;
+            break;
+    }
+}
 
 /*
     SetupBMP, im guessing, should complete all the initialations, configs, and setups, required for the BMP to function during flight.
@@ -472,21 +520,6 @@ void startADC(uint8_t channel)
     ADCCTL0 |= ADCENC | ADCSC;          // Enable + start conversion
 }
 
-// Interrupt that read ADC memory
-    #pragma vector=ADC_VECTOR
-__interrupt void ADC_ISR(void)
-{
-    switch (__even_in_range(ADCIV, ADCIV__ADCIFG0))
-    {
-        case ADCIV__ADCIFG0:
-            adcResult = ADCMEM0;   // Read ADC result
-            LPM0_EXIT;             // Wakes up CPU
-            break;
-        default:
-            break;
-    }
-}
-
 int16_t tempConversion(int16_t adcValue ) {
 	//converting adc count to voltage 
 	double VoltageTemp = (adcValue / ADCMAX) * VREF; 
@@ -504,8 +537,25 @@ int16_t tempConversion(int16_t adcValue ) {
 	return (int16_t)tempInCelsius;
 }
 
-int main(void) {  
+
+/*
+Main code; should be kept as clean as possible.
+*/
+
+int main(void) {
+    switch(current_flight_state){
+        case PREFLIGHT:
+
+            break;
+
+        case FLIGHT:
+            break;
+
+        case LANDED:
+            break;
+    }
     
+    // Preflight tasks
     initADC(); 
      
     __enable_interrupt();   
