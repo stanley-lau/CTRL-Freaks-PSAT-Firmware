@@ -6,7 +6,34 @@
 #include "hal/gpio.hpp"
 #include "hal/blocking_spi.hpp"
 
+// ==== Define Constants ==== //
+
+// PWM
 #define PWM_PERIOD 500
+
+// Pressure-Altitude Conversion || https://www.mide.com/air-pressure-at-altitude-calculator
+#define P_b 101325              // Static pressure at sea level [Pa]
+#define T_b 288                 // Standard temp at sea level [K]
+#define L_b -0.0065             // Started temp lapse rate [K/m]
+#define h_b 0                   // height at the bottom of atmospheric layer [m]
+#define R 8.31432               // universal gas constant [Nm/molK]
+#define g_0 9.80665             // Gravity constant
+#define M 0.0289644             // Molar Mass of Earth's Air [kg/mol]
+
+// Circular buffer size
+#define BMP_BUFFER_SIZE 32
+
+// Struct for storing data
+typedef struct {
+    int32_t pressure;
+    int32_t temperature;
+} BMPData;
+
+volatile BMPData bmpBuffer[BMP_BUFFER_SIZE];
+volatile uint8_t write_index = 0;
+volatile uint8_t read_index = 0;
+volatile uint8_t available_samples = 0;
+
 
 // Templates for BMP 
 Pin<P4,4> BMP_CS;
@@ -21,8 +48,8 @@ Pin<P2,4> BMP_INT;
 // BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code will run.
 volatile bool bmp_data_ready = false;
 
-#pragma vector=PORT6_VECTOR
-__interrupt void PORT6_ISR(void)
+#pragma vector=PORT2_VECTOR
+__interrupt void PORT2_ISR(void)
 {
     if (P2IFG & BIT4) {                     // if Bit4 on Port2 is set (BMP_INT)
         bmp_data_ready = true;                // Signal main loop
@@ -58,12 +85,12 @@ void setCoilPWM(uint8_t duty_cycle){
     // duty_cyle must be a positive integer between 0 and 100;
     // SMCLK is used at 1Mhz
 
-    if (duty_cyle > 100) {
-        duty_cyle = 100;
+    if (duty_cycle > 100) {
+        duty_cycle = 100;
     }
     
     // Update Duty cycle.
-    if (duty_cyle >= 100) {
+    if (duty_cycle >= 100) {
         TB2CCR2 = TB2CCR0 + 1; // force always-high
     } else {
         TB2CCR2 = (TB2CCR0 * duty_cycle) / 100;     // // Set LOW when TB0CCR1 is reached
@@ -137,7 +164,7 @@ void initBMP(){
     BMP_CS.toOutput().setHigh(); // Chip select
 
     // Enable BMP interupts;
-    BMP_INT.toOutput().risingEdgeTrigger().enableInterrupt()
+    BMP_INT.toOutput().risingEdgeTrigger().enableInterrupt();
 
     gpioUnlock();
 
@@ -238,9 +265,6 @@ void updateBMPStatus (void) {
     }
 }
 
-
-// FIX to read fom 0x05, and 0x06
-// REFER to BMP390L data sheet, sect.3.10 Data Readout from data registers - Having to burst read to ensure reliability
 uint32_t readRawPressure(){
     uint8_t data0, data1, data2;
 
@@ -264,8 +288,8 @@ uint32_t readRawPressure(){
     - Reads 6 consecutive registers (Press + temp)
     - Should store the data somewhere
 */
-
 void bmpReadSample(){
+    uint8_t int_status;  
     // Clear BMP's interrupt flag by reading from it.
     BMP_CS.setLow();
         BMP_SPI.writeByte(0x11 | 0x80);   // ORing with 0x08 forces bit 7 = 1 --> reading register mode. Register is cleared.
@@ -282,15 +306,32 @@ void bmpReadSample(){
         }
         BMP_SPI.flush();
     BMP_CS.setHigh();
-    // bmpData.pressure = (buf[2]<<16) | (buf[1]<<8) | buf[0];
-    // bmpData.pressure = (buf[5]<<16) | (buf[4]<<8) | buf[3];
-    // Find a way to store data whether that be locally or globally.
+
+    // Convert and store in circular buffer
+    bmpBuffer[write_index].pressure = ((uint32_t)buf[2] << 16) | ((uint32_t)buf[1] << 8) | buf[0];
+    bmpBuffer[write_index].temperature = ((uint32_t)buf[5] << 16) | ((uint32_t)buf[4] << 8) | buf[3];
+
+    /*
+    Data is stored like this:
+    bmpBuffer[0] = {pressure_sample0, temperature_sample0}
+    bmpBuffer[1] = {pressure_sample1, temperature_sample1}
+    bmpBuffer[2] = {pressure_sample2, temperature_sample2}
+    */
+
+    // Update circular buffer indices
+    write_index = (write_index + 1) % BMP_BUFFER_SIZE;
+    if (available_samples < BMP_BUFFER_SIZE) available_samples++;
 }
 
+
+/*
+pressureToAltitude() converts pressure [Pa] into heigh above sea level [m], and returns the result.
+*/
 // powf undefined - against using math.h
 // p0? being ground pressure?
-float pressureToAltitude(float pressure, float p0){
-    return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula 
+float pressureToAltitude(float pressure){
+    // return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula // eqn where??
+    return h_b + (T_b / L_b)*((pressure / P_b)^((-R * L_b) / (g_0 * M))-1); // Must use pow() here as "^" is a bit-wise OR
 }
 
 float calibrateGroundPressure(uint16_t samples){
@@ -353,7 +394,7 @@ void loop(float dt){
         return;
 
     float pressure = (float)readRawPressure();
-    altitude = pressureToAltitude(pressure, ground_pressure);
+    altitude = pressureToAltitude(pressure); // Ground pressure added a additional function call
 
     flightState = updateFlightState(flightState, altitude, prev_altitude, dt);
 
