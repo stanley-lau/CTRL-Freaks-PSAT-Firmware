@@ -192,12 +192,14 @@ void configureACCL(){
     ACCL_CS.setHigh();
     __delay_cycles(500);          
 
-    // Enable WOM logic
-    BLK_SEL_W = 0x00;       // MREG1
-    MADDR_W  = 0x0F;        // WOM control register address
-    M_W      = 0x40;        // Enable WOM (example value for now) 
-    __delay_us(10);         // Wait 10 µs
-    BLK_SEL_W = 0x00;       // Set after completing MREG1 access (deselecting)   
+    //WOM_CONFIG register
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x27 & 0x7F);   
+        ACCL_SPI.writeByte(1 << 0);       // Make bit 0 = 1 --> Wake On Motion (WOM) enabled 
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
+    __delay_cycles(500); 
+    
 
     //INT_SOURCE4 register
     ACCL_CS.setLow();
@@ -235,6 +237,10 @@ void UpdateACCLStatus() {
 }
 
 // Need to write code here to read ACCL data 
+
+uint32_t ReadACCL () {
+
+}
 
 void initBMP(){
     // Configure GPIO for SPI mode
@@ -349,7 +355,9 @@ uint32_t readRawPressure(){
     BMP_CS.setLow();
     BMP_SPI.writeByte(0x04 | 0x80);      // start at DATA_0. Pressure data is stored from 0x04 to 0x06
         data0 = BMP_SPI.readByte();      // Reading 0x04, PRESS_XLSB
+    BMP_SPI.writeByte(0x05 | 0x80);
         data1 = BMP_SPI.readByte();      // Reading 0x05, PRESS_LSB
+    BMP_SPI.writeByte(0x06 | 0x80);
         data2 = BMP_SPI.readByte();      // Reading 0x06, PRESS_MSB
     BMP_SPI.flush();
     BMP_CS.setHigh();
@@ -572,65 +580,62 @@ int16_t TempConversion(int16_t adcValue ) {
 	return (int16_t)TempInCelsius;
 }
 
+// Return the temperature of the chamber 
 int16_t ChamberTemp ()
 {
-    __enable_interrupt();
-
     uint16_t chamThermADC;
 
-    while (1)
-    {
-        // Chamber thermistor
-        startADC(ADC_CHAM_THERM);
-        LPM0;                                 //Code only continues when interrupt handler has collected all data
-        chamThermADC = adcResult;
+    // Chamber thermistor
+    startADC(ADC_CHAM_THERM);
+    LPM0;                                 //Code only continues when interrupt handler has collected all data
+    chamThermADC = adcResult;
 
-        // Convert temperatures
-        return TempConversion(chamThermADC);
-
-        // Set sampling frequency
-        __delay_cycles(800000);   // 10 Hz sampling
-    }
-
+    // Convert temperatures
+    return TempConversion(chamThermADC);
 }
+    
 
+// Return the temperature of the battery 
 int16_t BatteryTemp ()
 {
-    __enable_interrupt();
-
     uint16_t batThermADC;
 
-    while (1)
-    {
-        // Battery thermistor
-        startADC(ADC_BAT_THERM);
-        LPM0;
-        batThermADC = adcResult;
+    // Battery thermistor
+    startADC(ADC_BAT_THERM);
+    LPM0;
+    batThermADC = adcResult;
 
-        return TempConversion(batThermADC);
-
-        __delay_cycles(800000);   // 10 Hz sampling
-    }
-
-
+    return TempConversion(batThermADC);
 }
 
+// Return the value of current 
 double CurrentSense ()
-{
-    __enable_interrupt();   
-
+{ 
     uint16_t curSenseADC;
 
-    while (1)
-    {
-        // Current sense
-        startADC(ADC_CUR_SENSE);
-        LPM0;
-        curSenseADC = adcResult;        
-        return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
+    // Current sense
+    startADC(ADC_CUR_SENSE);
+    LPM0;
+    curSenseADC = adcResult;        
+    return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
+}
 
-        __delay_cycles(800000);   // 10 Hz sampling
-    }
+// When reading from ChamberTemp, BatteryTemp, CurrentSense, should add delay. 
+// Set sampling frequenc by using __delay_cycles(800000) = 10 Hz sampling
+
+// ------------ After landing ------------
+
+void vapeLoop () 
+{
+    //Turn PWM on (set coil PWM @ X value)
+    setCoilPWM(100);
+
+    __delay_cycles(100); 
+
+    //Turn PWM off (set coil PWM @ 0)
+    setCoilPWM(0);
+
+    __delay_cycles(100);
 }
 
 // Should move this inside recoverymode()
@@ -689,17 +694,3 @@ int main(void) {
 }
 
 
-// ------------ After landing ------------
-
-void vapeLoop () 
-{
-    //Turn PWM on (set coil PWM @ X value)
-    setCoilPWM(100);
-
-    __delay_cycles(100); 
-
-    //Turn PWM off (set coil PWM @ 0)
-    setCoilPWM(0);
-
-    __delay_cycles(100);
-}
