@@ -199,10 +199,10 @@ bool pressure_data_ready  = false;
 
 
 // Initialise enums;
-enum FlightState {PREFLIGHT, IDLE, FLIGHT, LANDED };
+enum FlightState {PREFLIGHT, FLIGHT, LANDED };
 // Create variable "current_flight_state" of type "FlightState", and set to "PREFLIGHT"
 enum FlightState current_flight_state = PREFLIGHT;
-enum FlightState prev_flight_state = IDLE; // Added for redundancy checks. IDLE state occurs when Preflight checks are DONE, and FLIGHT hasn't begun. This Preflight inits from looping again and again.
+enum FlightState prev_flight_state; // Added for redundancy checks. IDLE state occurs when Preflight checks are DONE, and FLIGHT hasn't begun. This Preflight inits from looping again and again.
 
 float ground_pressure = 0.0f;
 float intial_altitude = 0.0f;
@@ -403,16 +403,12 @@ FlightState updateFlightState(FlightState state, float altitude, float prev_alti
 void updateFlightStateV2(){
     switch (current_flight_state) {
         case PREFLIGHT:
-            // do nothing (for now)?
-            break;
-
-        case IDLE:
             // if current altitudee jumps from ground altitude AND ACCL > 0;
                 // if prev_flight_state != landed AND != FLIGHT
                     // current_flight = FLIGHT;
                     // prev_flight_state = IDLE;
             break;
-
+            
         case FLIGHT:
             // if current altitude and subsequence altitudes are ~= ground altitude AND accl ~ 0
                 // current_flight_state = LANDED;
@@ -543,22 +539,59 @@ Main code; should be kept as clean as possible.
 */
 
 int main(void) {
-    switch(current_flight_state){
-        case PREFLIGHT:
 
-            break;
-
-        case FLIGHT:
-            break;
-
-        case LANDED:
-            break;
-    }
+    // LoRa
     
-    // Preflight tasks
-    initADC(); 
-     
-    __enable_interrupt();   
+    initADC();
+    initCoilPWM();
+
+    initAccl();
+
+    initBMP();
+    configureBMP();
+
+    __enable_interrupt(); 
+
+
+
+    while(1){
+        /*
+
+        Read from sensors here
+        
+        */
+
+        // Update Flight State
+        updateFlightStateV2();
+
+        // State-depened behaviour
+        switch (current_flight_state) {
+            case PREFLIGHT:
+                break;
+            case IDLE:
+                break;
+            case FLIGHT:
+                break;
+            case LANDED:
+                break;
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     
     uint16_t chamThermADC;
     uint16_t batThermADC; 
