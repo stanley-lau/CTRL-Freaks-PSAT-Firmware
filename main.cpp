@@ -181,7 +181,8 @@ enum FlightState {PREFLIGHT, FLIGHT, LANDED };
 FlightState flightState = PREFLIGHT;
 
 float ground_pressure = 0.0f;
-float altitude       = 0.0f;
+float intial_altitude = 0.0f;
+float current_altitude = 0.0f;
 float prev_altitude   = 0.0f;
 
 // thresholds
@@ -279,8 +280,6 @@ uint32_t readRawPressure(){
     return ((uint32_t)data2 << 16) | ((uint32_t)data1 << 8) | data0; 
 }
 
-
-
 /* bmpReadSample() ...
     - combines updateBMPStatus() and readRawPressure into one function()
     - should be called in main() when the variable "bmp_data_ready" is = true;
@@ -325,15 +324,17 @@ void bmpReadSample(){
 
 
 /*
-pressureToAltitude() converts pressure [Pa] into heigh above sea level [m], and returns the result.
+    pressureToAltitude() converts pressure [Pa] into heigh above sea level [m], and returns the result.
 */
-// powf undefined - against using math.h
-// p0? being ground pressure?
 float pressureToAltitude(float pressure){
     // return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula // eqn where??
     return h_b + (T_b / L_b)*((pressure / P_b)^((-R * L_b) / (g_0 * M))-1); // Must use pow() here as "^" is a bit-wise OR
 }
 
+/*
+    calibrateGroundPressure takes X samples, calculates the average pressure, and returns the result.
+    Polling approach ass
+*/
 float calibrateGroundPressure(uint16_t samples){
     float sum = 0.0f;
     uint16_t collected = 0;
@@ -345,10 +346,12 @@ float calibrateGroundPressure(uint16_t samples){
         if (pressure_data_ready) {
             sum += (float)readRawPressure();
             collected++;
+            pressure_data_ready = false;  //Reset pressure_data_ready back to false after reading data.
         }
+        __delay_ms(10);
     }
 
-    return sum / samples;  // Return average of 100 samples 
+    return sum / samples;  // Return average pressure [Pa] of 100 samples 
 }
 
 
@@ -373,16 +376,29 @@ FlightState updateFlightState(FlightState state, float altitude, float prev_alti
     return state;
 }
 
-void setup(){
-    configureBMP();                                 //Configure once at start
 
+/*
+    SetupBMP, im guessing, should complete all the initialations, configs, and setups, required for the BMP to function during flight.
+    This should be called once at the start of the main() function.
+*/
+void setupBMP(){
+    // Initialise MCU pins for BMP SPI
+    initBMP();
+    
+    // Configure BMP's internal registers.
+    configureBMP();
+
+    // Polling approaching is okay during pre-flight phase. Poll until Pressure_data_ready is true.
     do {
         updateBMPStatus();
-    } while (!pressure_data_ready);                   // Keeps refreshing and reading STATUS until we get flag pressureDataReady.
+    } while (!pressure_data_ready);
 
-    ground_pressure = calibrateGroundPressure(100);  // Gets 100 samples 
-    altitude = 0.0f;
-    prev_altitude = 0.0f;
+    // Reset flag after loop exits.
+    pressure_data_ready = false;
+
+    // Calibrate ground pressure witwh 100 samples.
+    ground_pressure = calibrateGroundPressure(100);
+    intial_altitude = pressureToAltitude(float ground_pressure); 
 }
 
 
