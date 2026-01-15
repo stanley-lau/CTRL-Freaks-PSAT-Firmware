@@ -48,6 +48,15 @@ Pin<P4,7> BMP_MISO;
 SpiMaster<SPI_B1> BMP_SPI;
 Pin<P2,4> BMP_INT;
 
+// Templates for ACCL 
+Pin<P4,0> ACCL_CS;
+Pin<P4,1> ACCL_CLK;
+Pin<P4,2> ACCL_MOSI;
+Pin<P4,3> ACCL_MISO;
+SpiMaster<SPI_A1> ACCL_SPI; //CHECK on datasheet
+Pin<P6,0> ACCL_INT1;
+Pin<P2,3> ACCL_INT2;
+
 // ==== Interrupts ==== //
 
 // BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code will run.
@@ -192,7 +201,7 @@ void configureACCL(){
     ACCL_CS.setHigh();
     __delay_cycles(500);          
 
-    // Enable WOM logic
+    // Enable WOM logic // write to registers.
     BLK_SEL_W = 0x00;       // MREG1
     MADDR_W  = 0x0F;        // WOM control register address
     M_W      = 0x40;        // Enable WOM (example value for now) 
