@@ -498,7 +498,7 @@ void updateFlightState(){
             // if current altitudee jumps from ground altitude AND ACCL > 0;
                 // if prev_flight_state != landed AND != FLIGHT
                     // current_flight = FLIGHT;
-                    // prev_flight_state = IDLE;
+                    // prev_flight_state = PREFLIGHT;
             break;
             
         case FLIGHT:
@@ -509,6 +509,9 @@ void updateFlightState(){
 
         case LANDED:
             // do nothing;
+            break;
+            
+        case SHUTDOWN:
             break;
     }
 }
@@ -692,6 +695,11 @@ int main(void) {
     initBMP();
     configureBMP();
 
+    ground_pressure = calibrateGroundPressure(100);
+    initial_atitude = pressureToAltitude(ground_pressure);
+
+    current_flight_state = PREFLIGHT;
+
     // LoRa to ensure init was done succesfully 
 
     __enable_interrupt(); 
@@ -703,7 +711,18 @@ int main(void) {
         
         */
 
-        // Update Flight State
+        if (available_samples > 0) {
+            BMPData s = bmpBuffer[read_index];
+            read_index = (read_index + 1) % BMP_BUFFER_SIZE;
+            available_samples--;
+
+            sample.altitude = pressureToAltitude(s.pressure);
+            pushAltitude(sample.altitude);              // fills altitude window
+            sample.vertical_velocity = getVerticalSpeed();
+            have_sample = true;
+        }
+
+        // Update Flight State // should pass in small sample of data for flight determination.
         updateFlightState();
 
         // State-depened behaviour
