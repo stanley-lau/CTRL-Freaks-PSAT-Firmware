@@ -63,8 +63,7 @@ Pin<P2,3> ACCL_INT2;
 volatile bool bmp_data_ready = false;
 
 #pragma vector=PORT2_VECTOR
-__interrupt void PORT2_ISR(void)
-{
+__interrupt void PORT2_ISR(void) {
     if (P2IFG & BIT4) {                     // if Bit4 on Port2 is set (BMP_INT)
         bmp_data_ready = true;                // Signal main loop
         P2IFG &= ~BIT4;                     // MUST clear flag
@@ -74,8 +73,7 @@ __interrupt void PORT2_ISR(void)
 
 // ADC Interrupt: interrupt that read ADC memory
     #pragma vector=ADC_VECTOR
-__interrupt void ADC_ISR(void)
-{
+__interrupt void ADC_ISR(void) {
     switch (__even_in_range(ADCIV, ADCIV__ADCIFG0))
     {
         case ADCIV__ADCIFG0:
@@ -85,7 +83,7 @@ __interrupt void ADC_ISR(void)
         default:
             break;
     }
-}
+
 
 // initCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
@@ -109,7 +107,7 @@ void InitCoilPWM(){
 }
 
 // setCoilPWM sets the duty_cyle for the coil.
-void SetCoilPWM(uint8_t duty_cycle){
+void SetCoilPWM(uint8_t duty_cycle) {
     // PWM Coil P5.1 on schematic. 
     // duty_cyle must be a positive integer between 0 and 100;
     // SMCLK is used at 1Mhz
@@ -128,7 +126,7 @@ void SetCoilPWM(uint8_t duty_cycle){
 
 // Accl SPI pins are routed incorrectly. Cannot be resolved in software. Function written assuming routing is correctly
 // initAccl initialises SPI functionality 
-void InitACCL(){
+void InitACCL() {
     /*
     Assumes:
     P4.0 = ACCL_CS
@@ -184,7 +182,7 @@ void InitACCL(){
     */
 }
 
-void ConfigureACCL(){
+void ConfigureACCL() {
     //INT_CONFIG register
     ACCL_CS.setLow();
         ACCL_SPI.writeByte(0x06 & 0x7F);  // Bit 7 (MSB) = 0 --> write mode 
@@ -236,7 +234,6 @@ void ConfigureACCL(){
 }
 
 volatile bool ACCLReadyFlag = false;
-
 void UpdateACCLStatus() {
     uint8_t int_status_drdys;
 
@@ -254,7 +251,7 @@ void UpdateACCLStatus() {
 }
 
 // Return the acceleration magnitude 
-float ReadACCL(){
+float ReadACCL() {
     //xh indicates high byte in the x axis. xl = low byte in the x axis. etc. 
     uint8_t xh, xl, yh, yl, zh, zl;
     //Raw acceleration values in the x, y, z directions 
@@ -291,7 +288,7 @@ float ReadACCL(){
     return sqrtf(ax*ax + ay*ay + az*az);
 }
 
-void InitBMP(){
+void InitBMP() {
     // Configure GPIO for SPI mode
     BMP_MOSI.function(PinFunction::Primary);
     BMP_MISO.function(PinFunction::Primary);
@@ -319,10 +316,8 @@ enum FlightState current_flight_state = PREFLIGHT;
 
 float ground_pressure = 0.0f;
 float intial_altitude = 0.0f;
-float current_altitude = 0.0f;
-float prev_altitude   = 0.0f;
 
-void ConfigureBMP(){  
+void ConfigureBMP() {  
     data_ready_interrupt = false;     // Flags are cleared every time function is called. 
     pressure_data_ready  = false;
 
@@ -398,7 +393,7 @@ void UpdateBMPStatus (void) {
     }
 }
 
-uint32_t readRawPressure(){
+uint32_t readRawPressure() {
     uint8_t data0, data1, data2;
 
     BMP_CS.setLow();
@@ -421,7 +416,7 @@ uint32_t readRawPressure(){
     - Reads 6 consecutive registers (Press + temp)
     - Should store the data somewhere
 */
-void GetPressure(){
+void GetPressure() {
     uint8_t int_status;  
     // Clear BMP's interrupt flag by reading from it.
     BMP_CS.setLow();
@@ -456,11 +451,10 @@ void GetPressure(){
     if (available_samples < BMP_BUFFER_SIZE) available_samples++;
 }
 
-
 /*
     pressureToAltitude() converts pressure [Pa] into heigh above sea level [m], and returns the result.
 */
-float PressureToAltitude(float pressure){
+float PressureToAltitude(float pressure) {
     // return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula // eqn where??
     return h_b + (T_b / L_b)*((pressure / P_b)^((-R * L_b) / (g_0 * M))-1); // Must use pow() here as "^" is a bit-wise OR
 }
@@ -469,7 +463,7 @@ float PressureToAltitude(float pressure){
     calibrateGroundPressure takes X samples, calculates the average pressure, and returns the result.
     Polling approach ass
 */
-float CalibrateGroundPressure(uint16_t samples){
+float CalibrateGroundPressure(uint16_t samples) {
     float sum = 0.0f;
     uint16_t collected = 0;
 
@@ -492,7 +486,7 @@ float CalibrateGroundPressure(uint16_t samples){
     Modified from updateFlightState();
     This code should ultilse BOTH sensor's readings to determine the state 
 */
-void UpdateFlightState(){
+void UpdateFlightState() {
     switch (current_flight_state) {
         case PREFLIGHT:
             // if current altitudee jumps from ground altitude AND ACCL > 0;
@@ -520,7 +514,7 @@ void UpdateFlightState(){
     SetupBMP, im guessing, should complete all the initialations, configs, and setups, required for the BMP to function during flight.
     This should be called once at the start of the main() function.
 */
-void SetupBMP(){
+void SetupBMP() {
     // Initialise MCU pins for BMP SPI
     InitBMP();
     
@@ -538,6 +532,24 @@ void SetupBMP(){
     // Calibrate ground pressure witwh 100 samples.
     ground_pressure = CalibrateGroundPressure(100);
     intial_altitude = pressureToAltitude(float ground_pressure); 
+}
+
+void DisableBMP() {
+    // "PWR_CTRL" register
+    BMP_CS.setLow();
+        BMP_SPI.writeByte(0x1B & 0x7F);   // register address (write)  "0x1B" = "0001 1011". To the BMP390, this means PWR_CTRL Register
+        BMP_SPI.writeByte(0x00);          // Sleep mode: disable the temperature and pressure sensor 
+        BMP_SPI.flush();
+    BMP_CS.setHigh();
+}
+
+void DisableACCL() {
+    //PWR_MGMT0 register
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x1F & 0x7F);  
+        ACCL_SPI.writeByte(0x00);         // Turns accelerometer and gyroscope off
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
 }
 
 /* -------------------------------ADC------------------------------- */
@@ -584,7 +596,7 @@ void InitADC () {
     PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO / LPMx.5 Lock Bit 
 }
 
-void StartADC(uint8_t channel){
+void StartADC(uint8_t channel) {
     //ADCCTL0 &= ADCENC_0;                // Stop ADC (Using "_0 / _1" can be problematic as they're meant to be assignemts)
     ADCCTL0 &= ~ADCENC;                  // Clear the bit that enables ADC conversion. AKA stop ADC
 
@@ -611,7 +623,7 @@ int16_t TempConversion(int16_t adcValue ) {
 }
 
 // Return the temperature of the chamber 
-int16_t ChamberTemp (){
+int16_t ChamberTemp () {
     uint16_t chamThermADC;
 
     // Chamber thermistor
@@ -621,11 +633,10 @@ int16_t ChamberTemp (){
 
     // Convert temperatures
     return TempConversion(chamThermADC);
-}
-    
+}   
 
 // Return the temperature of the battery 
-int16_t BatteryTemp (){
+int16_t BatteryTemp () {
     uint16_t batThermADC;
 
     // Battery thermistor
@@ -637,7 +648,7 @@ int16_t BatteryTemp (){
 }
 
 // Return the value of current 
-double CurrentSense (){ 
+double CurrentSense () { 
     uint16_t curSenseADC;
 
     // Current sense
@@ -647,13 +658,36 @@ double CurrentSense (){
     return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
 }   
 
-// When reading from ChamberTemp, BatteryTemp, CurrentSense, should add delay. 
-// Set sampling frequenc by using __delay_cycles(800000) = 10 Hz sampling
+/* Code to turn off current when it exceeds a threshold. HERE IF NEEDED. 
+void currExceedThreshold() {
+    P5DIR |= BIT3;                       // Set P5.3 as output
+    double current = currentSense ();
+    if (current > CURRENT_MAX) {         // Threshold currently has placeholder value 
+            P5OUT &= ~BIT3;              // Turn off current (port 5, pin 3) if it exceeds a value 
+        } else {
+            P5OUT |= BIT3;               // Turns back on if current return to a safe low value
+        }
+}
+*/
+
+bool CurrExceedsThreshold() {
+    double current = CurrentSense();  // Gets current value 
+    return (current > CURRENT_MAX);   // Threshold currently has placeholder value. Returns true if over threshold, false otherwise
+}
+
+bool BatExceedsThreshold() {
+    double battery = BatteryTemp();   
+    return (battery > BATTERY_MAX);   // Threshold currently has placeholder value. 
+}
+
+bool ChamExceedsThreshold() {
+    double chamber = ChamberTemp();   
+    return (chamber > CHAMBER_MAX);   // Threshold currently has placeholder value. 
+}
 
 // ------------ After landing ------------
 
-void vapeLoop () 
-{
+void vapeLoop () {
     //Turn PWM on (set coil PWM @ X value)
     SetCoilPWM(100);
 
@@ -664,17 +698,6 @@ void vapeLoop ()
 
     __delay_cycles(100);
 }
-
-// Should move this inside recoverymode()
-    // Testing current 
-    P5DIR |= BIT3;                       // Set P5.3 as output
-    double current = CurrentSense ();
-    if (current > CURRENT_MAX) {
-            P5OUT &= ~BIT3;              // Turn off current (port 5, pin 3) if it exceeds a value 
-        } else {
-            P5OUT |= BIT3;               // Turns back on if current return to a safe low value
-        }
-
 
 
 /*
@@ -748,7 +771,7 @@ int main(void) {
 // ------------ After landing ------------
 
 
-void RecoveryMode(){
+void RecoveryMode() {
     // Turn off sensors
     DisableBMP();
     DisableACCL();
@@ -768,6 +791,7 @@ void RecoveryMode(){
                 duty_cycle = 0;
                 SetCoilPWM(duty_cycle);
 
+                __delay_cycles(800000) // Set sampling frequency: 10 Hz sampling
 
                 // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
                 safe_to_continue = MonitorTemperatures(PWM_MONITOR_PERIOD);
