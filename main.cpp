@@ -224,6 +224,15 @@ void configureACCL(){
         ACCL_SPI.flush();
     ACCL_CS.setHigh();
     __delay_cycles(500);
+
+    //ACCEL_CONFIG0 register
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x21 & 0x7F);   
+        ACCL_SPI.writeByte((0 << 5) | (0 << 6));       // Make bit 5 and 6 = 0 --> Accelerometer output = ±16g full-scale
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
+    __delay_cycles(500);
+
 }
 
 volatile bool ACCLReadyFlag = false;
@@ -244,10 +253,43 @@ void UpdateACCLStatus() {
     }
 }
 
-// Need to write code here to read ACCL data 
+// Return the acceleration magnitude 
+float ReadACCL()
+{
+    //xh indicates high byte in the x axis. xl = low byte in the x axis. etc. 
+    uint8_t xh, xl, yh, yl, zh, zl;
+    //Raw acceleration values in the x, y, z directions 
+    int16_t ax_raw, ay_raw, az_raw;
+    float ax, ay, az;
 
-uint32_t ReadACCL () {
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x0B | 0x80);  // Reading ACCEL_DATA_X1 register 
+        xh = ACCL_SPI.readByte();
+        ACCL_SPI.writeByte(0x0C | 0x80);  // Reading ACCEL_DATA_X0 register 
+        xl = ACCL_SPI.readByte();
+        ACCL_SPI.writeByte(0x0D | 0x80);  // Reading ACCEL_DATA_Y1 register 
+        yh = ACCL_SPI.readByte();
+        ACCL_SPI.writeByte(0x0E | 0x80);  // Reading ACCEL_DATA_Y0 register 
+        yl = ACCL_SPI.readByte();
+        ACCL_SPI.writeByte(0x0F | 0x80);  // Reading ACCEL_DATA_Z1 register 
+        zh = ACCL_SPI.readByte();
+        ACCL_SPI.writeByte(0x10 | 0x80);  // Reading ACCEL_DATA_Z0 register 
+        zl = ACCL_SPI.readByte();
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
 
+    // Combine high + low bytes of x, y, z axis 
+    ax_raw = (int16_t)((xh << 8) | xl);
+    ay_raw = (int16_t)((yh << 8) | yl);
+    az_raw = (int16_t)((zh << 8) | zl);
+
+    // Convert to g using ±16g full-scale
+    ax = ax_raw / 2048.0f;
+    ay = ay_raw / 2048.0f;
+    az = az_raw / 2048.0f;
+
+    // Magnitude of acceleration vector
+    return sqrtf(ax*ax + ay*ay + az*az);
 }
 
 void initBMP(){
