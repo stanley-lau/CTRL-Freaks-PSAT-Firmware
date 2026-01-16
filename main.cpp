@@ -272,7 +272,7 @@ bool data_ready_interrupt = false;
 bool pressure_data_ready  = false;
 
 // Initialise enums;
-enum FlightState {PREFLIGHT, FLIGHT, LANDED };
+enum FlightState {PREFLIGHT, FLIGHT, LANDED, SHUTDOWN };
 // Create variable "current_flight_state" of type "FlightState", and set to "PREFLIGHT"
 enum FlightState current_flight_state = PREFLIGHT;
 
@@ -561,8 +561,7 @@ void initADC () {
     PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO / LPMx.5 Lock Bit 
 }
 
-void startADC(uint8_t channel)
-{
+void startADC(uint8_t channel){
     //ADCCTL0 &= ADCENC_0;                // Stop ADC (Using "_0 / _1" can be problematic as they're meant to be assignemts)
     ADCCTL0 &= ~ADCENC;                  // Clear the bit that enables ADC conversion. AKA stop ADC
 
@@ -589,8 +588,7 @@ int16_t TempConversion(int16_t adcValue ) {
 }
 
 // Return the temperature of the chamber 
-int16_t ChamberTemp ()
-{
+int16_t ChamberTemp (){
     uint16_t chamThermADC;
 
     // Chamber thermistor
@@ -604,8 +602,7 @@ int16_t ChamberTemp ()
     
 
 // Return the temperature of the battery 
-int16_t BatteryTemp ()
-{
+int16_t BatteryTemp (){
     uint16_t batThermADC;
 
     // Battery thermistor
@@ -617,8 +614,7 @@ int16_t BatteryTemp ()
 }
 
 // Return the value of current 
-double CurrentSense ()
-{ 
+double CurrentSense (){ 
     uint16_t curSenseADC;
 
     // Current sense
@@ -644,16 +640,6 @@ void vapeLoop ()
     setCoilPWM(0);
 
     __delay_cycles(100);
-    while (1)
-    {
-        // Current sense
-        startADC(ADC_CUR_SENSE);
-        LPM0;
-        curSenseADC = adcResult;        
-        return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
-
-        __delay_cycles(800000);   // 10 Hz sampling
-    }
 }
 
 // Should move this inside recoverymode()
@@ -673,6 +659,7 @@ Main code; should be kept as clean as possible.
 */
 
 int main(void) {
+    bool recovery_active = false;
 
     // LoRa
     
@@ -706,7 +693,14 @@ int main(void) {
             case FLIGHT:
                 break;
             case LANDED:
+                if (!recovery_active){
+                    // Enter recovery
+                    recoveryMode();
+                    recovery_active = true;
+                }
                 break;
+            case SHUTDOWN:
+                break
         }
     }
 }
@@ -714,18 +708,55 @@ int main(void) {
 
 // ------------ After landing ------------
 
-void vapeLoop () 
-{
-    //Turn PWM on (set coil PWM @ X value)
-    setCoilPWM(100);
 
-    __delay_cycles(100); 
+void recoveryMode(){
+    // Turn off sensors
+    turnOffBMP();
+    turnOffACCL();
 
-    //Turn PWM off (set coil PWM @ 0)
-    setCoilPWM(0);
+    // Delay 7.5min should occur
+    // enableBeacon() should happen aswell
 
-    __delay_cycles(100);
+    while(current_flight_state != SHUTDOWN){
+        // Clear timer
+        // start the timer
+
+
+        setCoilPWM(uint8_t duty_cycle);
+
+        while (1){
+            if (currExceedThreshold() || batExceedsThreshold() || chamExceedsThreshold()){
+                duty_cycle = 0;
+                setCoilPWM(duty_cycle);
+
+
+                // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
+                safe_to_continue = monitorTemperatures(PWM_MONITOR_PERIOD);
+                if (!safe_to_continue){
+                    // Could add a warning mechanism before shut down. ie 3 chances to cool down, otherwise shutdown.
+                    current_flight_state = SHUTDOWN;
+                    // disconnectBattery()
+                    // sendShutdownMessage() Could be a LoRa function call?
+                break;
+                }
+            }
+            
+            if (custom_timer_interrupt == true){
+                custom_timer_interrupt == false
+
+                duty_cycle = 0;
+                setCoilPWM(duty_cycle);
+
+                // start timer again in background.
+
+                // LoRa in between
+
+                // check timer.
+
+                break;
+            }
+
+        }
+    }
+    break;
 }
-
-
-//A comment
