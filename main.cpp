@@ -2,6 +2,8 @@
 #include <msp430.h>
 #include <stdint.h>
 #include "util.h"
+// Include library that allows bool <stdbool.h>
+// Include <math.h> for pow and log 
 
 #include "hal/gpio.hpp"
 #include "hal/blocking_spi.hpp"
@@ -19,11 +21,6 @@
 #define R 8.31432               // universal gas constant [Nm/molK]
 #define g_0 9.80665             // Gravity constant
 #define M 0.0289644             // Molar Mass of Earth's Air [kg/mol]
-
-// BMP threshold values
-#define LAUNCH_VEL_THRESH  5.0f    // [m/s] upward
-#define LAND_VEL_THRESH    0.3f    // [m/s]
-#define LAND_ALT_THRESH    5.0f    // [m]
 
 // Circular buffer size for BMP
 #define BMP_BUFFER_SIZE 32
@@ -70,7 +67,6 @@ __interrupt void PORT2_ISR(void) {
     }
 }
 
-
 // ADC Interrupt: interrupt that read ADC memory
     #pragma vector=ADC_VECTOR
 __interrupt void ADC_ISR(void) {
@@ -83,6 +79,7 @@ __interrupt void ADC_ISR(void) {
         default:
             break;
     }
+}
 
 
 // initCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
@@ -106,8 +103,9 @@ void InitCoilPWM(){
     //     = Clear Timer_B0 |  Set SMCLK as clk | Up-Mode: Count upwards
 }
 
+uint8_t duty_cycle;
 // setCoilPWM sets the duty_cyle for the coil.
-void SetCoilPWM(uint8_t duty_cycle) {
+void SetCoilPWM(duty_cycle) {
     // PWM Coil P5.1 on schematic. 
     // duty_cyle must be a positive integer between 0 and 100;
     // SMCLK is used at 1Mhz
@@ -315,7 +313,7 @@ enum FlightState {PREFLIGHT, FLIGHT, LANDED, SHUTDOWN };
 enum FlightState current_flight_state = PREFLIGHT;
 
 float ground_pressure = 0.0f;
-float intial_altitude = 0.0f;
+float initial_altitude = 0.0f;
 
 void ConfigureBMP() {  
     data_ready_interrupt = false;     // Flags are cleared every time function is called. 
@@ -531,7 +529,7 @@ void SetupBMP() {
 
     // Calibrate ground pressure witwh 100 samples.
     ground_pressure = CalibrateGroundPressure(100);
-    intial_altitude = pressureToAltitude(float ground_pressure); 
+    initial_altitude = pressureToAltitude(float ground_pressure); 
 }
 
 void DisableBMP() {
@@ -563,7 +561,11 @@ volatile uint16_t adcResult;
 #define RTHERM 10000
 #define T0_K 298.15 //25 degrees Celsius in Kelvin 
 
+
+// These are all placeholder values. Should be checked!!!!
 #define CURRENT_MAX 2.0   // Max current in Amps
+#define BATTERY_MAX 2.0
+#define CHAM_MAX    2.0 
 #define R_SENSE 0.1       // Shunt resistor in Ohms
 // Values need to be checked 
 
@@ -654,8 +656,9 @@ double CurrentSense () {
     // Current sense
     StartADC(ADC_CUR_SENSE);
     LPM0;
-    curSenseADC = adcResult;        
-    return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
+    curSenseADC = adcResult;   
+    double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current     
+    return current; 
 }   
 
 /* Code to turn off current when it exceeds a threshold. HERE IF NEEDED. 
@@ -719,7 +722,7 @@ int main(void) {
     ConfigureBMP();
 
     ground_pressure = CalibrateGroundPressure(100);
-    initial_atitude = PressureToAltitude(ground_pressure);
+    initial_altitude = PressureToAltitude(ground_pressure);
 
     current_flight_state = PREFLIGHT;
 
@@ -757,7 +760,7 @@ int main(void) {
             case LANDED:
                 if (!recovery_active){
                     // Enter recovery
-                    recoveryMode();
+                    RecoveryMode();
                     recovery_active = true;
                 }
                 break;
@@ -791,7 +794,7 @@ void RecoveryMode() {
                 duty_cycle = 0;
                 SetCoilPWM(duty_cycle);
 
-                __delay_cycles(800000) // Set sampling frequency: 10 Hz sampling
+                __delay_cycles(800000); // Set sampling frequency: 10 Hz sampling
 
                 // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
                 safe_to_continue = MonitorTemperatures(PWM_MONITOR_PERIOD);
@@ -805,10 +808,10 @@ void RecoveryMode() {
             }
             
             if (custom_timer_interrupt == true){
-                custom_timer_interrupt == false
+                custom_timer_interrupt = false;
 
                 duty_cycle = 0;
-                SpiModeetCoilPWM(duty_cycle);
+                SetCoilPWM(duty_cycle);
 
                 // start timer again in background.
 
