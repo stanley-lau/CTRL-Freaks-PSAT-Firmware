@@ -89,7 +89,7 @@ __interrupt void ADC_ISR(void)
 
 // initCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
-void initCoilPWM(){
+void InitCoilPWM(){
     // Setup Pins
     P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to 1. (1 = Output) BIT1 Corresponds to PIN1 on the Port.
     P5SEL0 &= ~BIT1;                            // Clear BIT1 in P5SEL0. Now P5SEL0 BIT1 = 0
@@ -109,7 +109,7 @@ void initCoilPWM(){
 }
 
 // setCoilPWM sets the duty_cyle for the coil.
-void setCoilPWM(uint8_t duty_cycle){
+void SetCoilPWM(uint8_t duty_cycle){
     // PWM Coil P5.1 on schematic. 
     // duty_cyle must be a positive integer between 0 and 100;
     // SMCLK is used at 1Mhz
@@ -128,7 +128,7 @@ void setCoilPWM(uint8_t duty_cycle){
 
 // Accl SPI pins are routed incorrectly. Cannot be resolved in software. Function written assuming routing is correctly
 // initAccl initialises SPI functionality 
-void initACCL(){
+void InitACCL(){
     /*
     Assumes:
     P4.0 = ACCL_CS
@@ -184,7 +184,7 @@ void initACCL(){
     */
 }
 
-void configureACCL(){
+void ConfigureACCL(){
     //INT_CONFIG register
     ACCL_CS.setLow();
         ACCL_SPI.writeByte(0x06 & 0x7F);  // Bit 7 (MSB) = 0 --> write mode 
@@ -291,7 +291,7 @@ float ReadACCL(){
     return sqrtf(ax*ax + ay*ay + az*az);
 }
 
-void initBMP(){
+void InitBMP(){
     // Configure GPIO for SPI mode
     BMP_MOSI.function(PinFunction::Primary);
     BMP_MISO.function(PinFunction::Primary);
@@ -322,7 +322,7 @@ float intial_altitude = 0.0f;
 float current_altitude = 0.0f;
 float prev_altitude   = 0.0f;
 
-void configureBMP(){  
+void ConfigureBMP(){  
     data_ready_interrupt = false;     // Flags are cleared every time function is called. 
     pressure_data_ready  = false;
 
@@ -363,7 +363,7 @@ void configureBMP(){
     BMP_CS.setHigh();
 }
 
-void updateBMPStatus (void) {
+void UpdateBMPStatus (void) {
     uint8_t int_status;  
     uint8_t status;
 
@@ -421,7 +421,7 @@ uint32_t readRawPressure(){
     - Reads 6 consecutive registers (Press + temp)
     - Should store the data somewhere
 */
-void bmpReadSample(){
+void GetPressure(){
     uint8_t int_status;  
     // Clear BMP's interrupt flag by reading from it.
     BMP_CS.setLow();
@@ -460,7 +460,7 @@ void bmpReadSample(){
 /*
     pressureToAltitude() converts pressure [Pa] into heigh above sea level [m], and returns the result.
 */
-float pressureToAltitude(float pressure){
+float PressureToAltitude(float pressure){
     // return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula // eqn where??
     return h_b + (T_b / L_b)*((pressure / P_b)^((-R * L_b) / (g_0 * M))-1); // Must use pow() here as "^" is a bit-wise OR
 }
@@ -469,13 +469,13 @@ float pressureToAltitude(float pressure){
     calibrateGroundPressure takes X samples, calculates the average pressure, and returns the result.
     Polling approach ass
 */
-float calibrateGroundPressure(uint16_t samples){
+float CalibrateGroundPressure(uint16_t samples){
     float sum = 0.0f;
     uint16_t collected = 0;
 
     // Rereads the status register and refreshes data every time 
     while (collected < samples) {
-        updateBMPStatus();
+        UpdateBMPStatus();
 
         if (pressure_data_ready) {
             sum += (float)readRawPressure();
@@ -492,7 +492,7 @@ float calibrateGroundPressure(uint16_t samples){
     Modified from updateFlightState();
     This code should ultilse BOTH sensor's readings to determine the state 
 */
-void updateFlightState(){
+void UpdateFlightState(){
     switch (current_flight_state) {
         case PREFLIGHT:
             // if current altitudee jumps from ground altitude AND ACCL > 0;
@@ -520,23 +520,23 @@ void updateFlightState(){
     SetupBMP, im guessing, should complete all the initialations, configs, and setups, required for the BMP to function during flight.
     This should be called once at the start of the main() function.
 */
-void setupBMP(){
+void SetupBMP(){
     // Initialise MCU pins for BMP SPI
-    initBMP();
+    InitBMP();
     
     // Configure BMP's internal registers.
-    configureBMP();
+    ConfigureBMP();
 
     // Polling approaching is okay during pre-flight phase. Poll until Pressure_data_ready is true.
     do {
-        updateBMPStatus();
+        UpdateBMPStatus();
     } while (!pressure_data_ready);
 
     // Reset flag after loop exits.
     pressure_data_ready = false;
 
     // Calibrate ground pressure witwh 100 samples.
-    ground_pressure = calibrateGroundPressure(100);
+    ground_pressure = CalibrateGroundPressure(100);
     intial_altitude = pressureToAltitude(float ground_pressure); 
 }
 
@@ -559,7 +559,7 @@ volatile uint16_t adcResult;
 #define ADC_BAT_THERM    ADCINCH_10   // P5.2 / A10
 #define ADC_CUR_SENSE    ADCINCH_11   // P5.3 / A11
 
-void initADC () {
+void InitADC () {
     /*
     may need to write code for this init. 
     clock_init();
@@ -584,7 +584,7 @@ void initADC () {
     PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO / LPMx.5 Lock Bit 
 }
 
-void startADC(uint8_t channel){
+void StartADC(uint8_t channel){
     //ADCCTL0 &= ADCENC_0;                // Stop ADC (Using "_0 / _1" can be problematic as they're meant to be assignemts)
     ADCCTL0 &= ~ADCENC;                  // Clear the bit that enables ADC conversion. AKA stop ADC
 
@@ -615,7 +615,7 @@ int16_t ChamberTemp (){
     uint16_t chamThermADC;
 
     // Chamber thermistor
-    startADC(ADC_CHAM_THERM);
+    StartADC(ADC_CHAM_THERM);
     LPM0;                                 //Code only continues when interrupt handler has collected all data
     chamThermADC = adcResult;
 
@@ -629,7 +629,7 @@ int16_t BatteryTemp (){
     uint16_t batThermADC;
 
     // Battery thermistor
-    startADC(ADC_BAT_THERM);
+    StartADC(ADC_BAT_THERM);
     LPM0;
     batThermADC = adcResult;
 
@@ -641,7 +641,7 @@ double CurrentSense (){
     uint16_t curSenseADC;
 
     // Current sense
-    startADC(ADC_CUR_SENSE);
+    StartADC(ADC_CUR_SENSE);
     LPM0;
     curSenseADC = adcResult;        
     return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
@@ -655,12 +655,12 @@ double CurrentSense (){
 void vapeLoop () 
 {
     //Turn PWM on (set coil PWM @ X value)
-    setCoilPWM(100);
+    SetCoilPWM(100);
 
     __delay_cycles(100); 
 
     //Turn PWM off (set coil PWM @ 0)
-    setCoilPWM(0);
+    SetCoilPWM(0);
 
     __delay_cycles(100);
 }
@@ -686,17 +686,17 @@ int main(void) {
 
     // LoRa
     
-    initADC();
-    initCoilPWM();
+    InitADC();
+    InitCoilPWM();
 
-    initACCL();
-    configureACCL();
+    InitACCL();
+    ConfigureACCL();
 
-    initBMP();
-    configureBMP();
+    InitBMP();
+    ConfigureBMP();
 
-    ground_pressure = calibrateGroundPressure(100);
-    initial_atitude = pressureToAltitude(ground_pressure);
+    ground_pressure = CalibrateGroundPressure(100);
+    initial_atitude = PressureToAltitude(ground_pressure);
 
     current_flight_state = PREFLIGHT;
 
@@ -723,7 +723,7 @@ int main(void) {
         }
 
         // Update Flight State // should pass in small sample of data for flight determination.
-        updateFlightState();
+        UpdateFlightState();
 
         // State-depened behaviour
         switch (current_flight_state) {
@@ -748,10 +748,10 @@ int main(void) {
 // ------------ After landing ------------
 
 
-void recoveryMode(){
+void RecoveryMode(){
     // Turn off sensors
-    turnOffBMP();
-    turnOffACCL();
+    DisableBMP();
+    DisableACCL();
 
     // Delay 7.5min should occur
     // enableBeacon() should happen aswell
@@ -761,16 +761,16 @@ void recoveryMode(){
         // start the timer
 
 
-        setCoilPWM(uint8_t duty_cycle);
+        SetCoilPWM(uint8_t duty_cycle);
 
         while (1){
-            if (currExceedThreshold() || batExceedsThreshold() || chamExceedsThreshold()){
+            if (CurrExceedThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()){
                 duty_cycle = 0;
-                setCoilPWM(duty_cycle);
+                SetCoilPWM(duty_cycle);
 
 
                 // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
-                safe_to_continue = monitorTemperatures(PWM_MONITOR_PERIOD);
+                safe_to_continue = MonitorTemperatures(PWM_MONITOR_PERIOD);
                 if (!safe_to_continue){
                     // Could add a warning mechanism before shut down. ie 3 chances to cool down, otherwise shutdown.
                     current_flight_state = SHUTDOWN;
@@ -784,7 +784,7 @@ void recoveryMode(){
                 custom_timer_interrupt == false
 
                 duty_cycle = 0;
-                setCoilPWM(duty_cycle);
+                SpiModeetCoilPWM(duty_cycle);
 
                 // start timer again in background.
 
