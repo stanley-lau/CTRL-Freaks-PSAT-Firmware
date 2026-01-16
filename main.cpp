@@ -48,6 +48,15 @@ Pin<P4,7> BMP_MISO;
 SpiMaster<SPI_B1> BMP_SPI;
 Pin<P2,4> BMP_INT;
 
+// Templates for ACCL 
+Pin<P4,0> ACCL_CS;
+Pin<P4,1> ACCL_CLK;
+Pin<P4,2> ACCL_MOSI;
+Pin<P4,3> ACCL_MISO;
+SpiMaster<SPI_A1> ACCL_SPI; //CHECK on datasheet
+Pin<P6,0> ACCL_INT1;
+Pin<P2,3> ACCL_INT2;
+
 // ==== Interrupts ==== //
 
 // BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code will run.
@@ -199,7 +208,6 @@ void configureACCL(){
         ACCL_SPI.flush();
     ACCL_CS.setHigh();
     __delay_cycles(500); 
-    
 
     //INT_SOURCE4 register
     ACCL_CS.setLow();
@@ -618,7 +626,7 @@ double CurrentSense ()
     LPM0;
     curSenseADC = adcResult;        
     return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
-}
+}   
 
 // When reading from ChamberTemp, BatteryTemp, CurrentSense, should add delay. 
 // Set sampling frequenc by using __delay_cycles(800000) = 10 Hz sampling
@@ -636,6 +644,16 @@ void vapeLoop ()
     setCoilPWM(0);
 
     __delay_cycles(100);
+    while (1)
+    {
+        // Current sense
+        startADC(ADC_CUR_SENSE);
+        LPM0;
+        curSenseADC = adcResult;        
+        return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
+
+        __delay_cycles(800000);   // 10 Hz sampling
+    }
 }
 
 // Should move this inside recoverymode()
@@ -694,3 +712,17 @@ int main(void) {
 }
 
 
+// ------------ After landing ------------
+
+void vapeLoop () 
+{
+    //Turn PWM on (set coil PWM @ X value)
+    setCoilPWM(100);
+
+    __delay_cycles(100); 
+
+    //Turn PWM off (set coil PWM @ 0)
+    setCoilPWM(0);
+
+    __delay_cycles(100);
+}
