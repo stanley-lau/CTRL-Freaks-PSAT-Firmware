@@ -254,8 +254,7 @@ void UpdateACCLStatus() {
 }
 
 // Return the acceleration magnitude 
-float ReadACCL()
-{
+float ReadACCL(){
     //xh indicates high byte in the x axis. xl = low byte in the x axis. etc. 
     uint8_t xh, xl, yh, yl, zh, zl;
     //Raw acceleration values in the x, y, z directions 
@@ -489,32 +488,11 @@ float calibrateGroundPressure(uint16_t samples){
     return sum / samples;  // Return average pressure [Pa] of 100 samples 
 }
 
-
-FlightState updateFlightState(FlightState state, float altitude, float prev_altitude, float dt){
-    float velocity = (altitude - prev_altitude) / dt;
-
-    switch (state) {
-        case PREFLIGHT:
-            if (velocity > LAUNCH_VEL_THRESH)
-                return FLIGHT;
-            break;
-
-        case FLIGHT:
-            if (fabsf(velocity) < LAND_VEL_THRESH && altitude < LAND_ALT_THRESH)
-                return LANDED;
-            break;
-
-        case LANDED:
-            break;
-    }
-
-    return state;
-}
 /*
     Modified from updateFlightState();
     This code should ultilse BOTH sensor's readings to determine the state 
 */
-void updateFlightStateV2(){
+void updateFlightState(){
     switch (current_flight_state) {
         case PREFLIGHT:
             // if current altitudee jumps from ground altitude AND ACCL > 0;
@@ -614,10 +592,10 @@ void startADC(uint8_t channel){
 
 int16_t TempConversion(int16_t adcValue ) {
 	//converting adc count to voltage 
-	double VoltageTemp = (adcValue / ADCMAX) * VREF; 
+	double voltage_temp = (adcValue / ADCMAX) * VREF; 
 	
 	//calculate thermistor resistance 
-	double ThermistorResistance = RESISTOR * (VREF - VoltageTemp)/ VoltageTemp; // Should add error checking. ie dividing by 0
+	double ThermistorResistance = RESISTOR * (VREF - voltage_temp)/ voltage_temp; // Should add error checking. ie dividing by 0
 
 	//apply beta formula 
 	double InvertedTemp = (1.0/T0_K) + (1.0/ BETA) * log(ThermistorResistance/RTHERM); // Log not defined. Will need to find a way to allow this without heavy resource consumption
@@ -726,7 +704,7 @@ int main(void) {
         */
 
         // Update Flight State
-        updateFlightStateV2();
+        updateFlightState();
 
         // State-depened behaviour
         switch (current_flight_state) {
