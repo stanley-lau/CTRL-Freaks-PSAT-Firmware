@@ -83,7 +83,7 @@ __interrupt void ADC_ISR(void) {
         default:
             break;
     }
-
+}
 
 // initCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
