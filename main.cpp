@@ -2,6 +2,7 @@
 #include <msp430.h>
 #include <stdint.h>
 #include "util.h"
+// Add #include <math.h> 
 
 #include "hal/gpio.hpp"
 #include "hal/blocking_spi.hpp"
@@ -19,11 +20,6 @@
 #define R 8.31432               // universal gas constant [Nm/molK]
 #define g_0 9.80665             // Gravity constant
 #define M 0.0289644             // Molar Mass of Earth's Air [kg/mol]
-
-// BMP threshold values
-#define LAUNCH_VEL_THRESH  5.0f    // [m/s] upward
-#define LAND_VEL_THRESH    0.3f    // [m/s]
-#define LAND_ALT_THRESH    5.0f    // [m]
 
 // Circular buffer size for BMP
 #define BMP_BUFFER_SIZE 32
@@ -70,14 +66,13 @@ __interrupt void PORT2_ISR(void) {
     }
 }
 
-
 // ADC Interrupt: interrupt that read ADC memory
     #pragma vector=ADC_VECTOR
 __interrupt void ADC_ISR(void) {
     switch (__even_in_range(ADCIV, ADCIV__ADCIFG0))
     {
         case ADCIV__ADCIFG0:
-            adcResult = ADCMEM0;   // Read ADC result
+            adc_result = ADCMEM0;   // Read ADC result
             LPM0_EXIT;             // Wakes up CPU
             break;
         default:
@@ -85,7 +80,7 @@ __interrupt void ADC_ISR(void) {
     }
 }
 
-// initCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
+// InitCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
 void InitCoilPWM(){
     // Setup Pins
@@ -106,7 +101,7 @@ void InitCoilPWM(){
     //     = Clear Timer_B0 |  Set SMCLK as clk | Up-Mode: Count upwards
 }
 
-// setCoilPWM sets the duty_cyle for the coil.
+// SetCoilPWM sets the duty_cyle for the coil.
 void SetCoilPWM(uint8_t duty_cycle) {
     // PWM Coil P5.1 on schematic. 
     // duty_cyle must be a positive integer between 0 and 100;
@@ -125,7 +120,7 @@ void SetCoilPWM(uint8_t duty_cycle) {
 }
 
 // Accl SPI pins are routed incorrectly. Cannot be resolved in software. Function written assuming routing is correctly
-// initAccl initialises SPI functionality 
+// InitACCL initialises SPI functionality 
 void InitACCL() {
     /*
     Assumes:
@@ -183,13 +178,21 @@ void InitACCL() {
 }
 
 void ConfigureACCL() {
+    //PWR_MGMT0 register
+    ACCL_CS.setLow();
+        ACCL_SPI.writeByte(0x1F & 0x7F);  
+        ACCL_SPI.writeByte((1 << 0) | (1 << 1));         // Make 0, 1 = 1 --> Places accelerometer in Low Noise (LN) Mode
+        ACCL_SPI.flush();
+    ACCL_CS.setHigh();
+    __delay_cycles(500);                  // Small safety delay
+
     //INT_CONFIG register
     ACCL_CS.setLow();
         ACCL_SPI.writeByte(0x06 & 0x7F);  // Bit 7 (MSB) = 0 --> write mode 
         ACCL_SPI.writeByte(0x3F);         // = 0011 1111 = INT1: active high, push-pull, latched, INT2: active high, push-pull, latched
         ACCL_SPI.flush();
     ACCL_CS.setHigh();
-    __delay_cycles(500);                  // Small safety delay
+    __delay_cycles(500);               
 
     //INT_SOURCE0 register
     ACCL_CS.setLow();
@@ -316,7 +319,7 @@ enum FlightState {PREFLIGHT, FLIGHT, LANDED, SHUTDOWN };
 enum FlightState current_flight_state = PREFLIGHT;
 
 float ground_pressure = 0.0f;
-float intial_altitude = 0.0f;
+float initial_altitude = 0.0f;
 
 void ConfigureBMP() {  
     data_ready_interrupt = false;     // Flags are cleared every time function is called. 
@@ -393,7 +396,6 @@ void UpdateBMPStatus (void) {
         
     }
 }
-
 
 // Review burst reading, and see if the BMP's register's auto increment when being read.
 uint32_t readRawPressure() {
@@ -534,7 +536,7 @@ void SetupBMP() {
 
     // Calibrate ground pressure witwh 100 samples.
     ground_pressure = CalibrateGroundPressure(100);
-    intial_altitude = pressureToAltitude(float ground_pressure); 
+    initial_altitude = pressureToAltitude(float ground_pressure); 
 }
 
 void DisableBMP() {
@@ -557,7 +559,7 @@ void DisableACCL() {
 
 /* -------------------------------ADC------------------------------- */
 
-volatile uint16_t adcResult;
+volatile uint16_t adc_result;
 
 #define ADCMAX 4095.00 //Correlating to 12 bits
 #define VREF  2.5
@@ -590,7 +592,7 @@ void InitADC () {
    
     ADCCTL2 |= ADCRES_2;                        // 12-bit resolution for the conversion result
 
-    ADCIE |= ADCIE0;                          // Enable interrupts 
+    ADCIE |= ADCIE0;                            // Enable interrupts 
 
     ADCCTL0 = ADCSHT_4 | ADCON;                 // sample and hold for 64 clock cycles, enable ADC.
 
@@ -632,7 +634,7 @@ int16_t ChamberTemp () {
     // Chamber thermistor
     StartADC(ADC_CHAM_THERM);
     LPM0;                                 //Code only continues when interrupt handler has collected all data
-    chamThermADC = adcResult;
+    chamThermADC = adc_result; 
 
     // Convert temperatures
     return TempConversion(chamThermADC);
@@ -645,7 +647,7 @@ int16_t BatteryTemp () {
     // Battery thermistor
     StartADC(ADC_BAT_THERM);
     LPM0;
-    batThermADC = adcResult;
+    batThermADC = adc_result;
 
     return TempConversion(batThermADC);
 }
@@ -657,7 +659,7 @@ double CurrentSense () {
     // Current sense
     StartADC(ADC_CUR_SENSE);
     LPM0;
-    curSenseADC = adcResult;        
+    curSenseADC = adc_result;        
     return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
 }   
 
@@ -690,6 +692,30 @@ bool ChamExceedsThreshold() {
 
 // ------------ After landing ------------
 
+// Return true/false depending on whether temperature has dip below threshold during monitoring period
+bool MonitorTemperatures(uint16_t monitor_seconds)
+{
+    uint16_t elapsed_seconds = 0;
+
+    // Check once every second, for 40 seconds 
+    while (elapsed_seconds < (monitor_seconds))
+    {
+        // If ALL are below threshold at the same time → safe
+        if (!BatExceedsThreshold() && !ChamExceedsThreshold()) {
+            return true;
+        }
+
+        __delay_cycles(1000000);  // ~1000 ms (= 1 second) at 1 MHz (default frequency for MSP430)
+        elapsed_seconds += 1;
+    }
+
+    // Did not cool down sufficiently within time window
+    return false;
+}
+
+void DisconnectBattery() {
+    P5OUT &= ~BIT2;   // Turn port 5.2 / battery OFF 
+}
 
 void RecoveryMode() {
     // Turn off sensors
@@ -703,7 +729,6 @@ void RecoveryMode() {
         // Clear timer
         // start the timer
 
-
         SetCoilPWM(uint8_t duty_cycle);
 
         while (1){
@@ -711,24 +736,22 @@ void RecoveryMode() {
                 duty_cycle = 0;
                 SetCoilPWM(duty_cycle);
 
-                __delay_cycles(800000) // Set sampling frequency: 10 Hz sampling
-
                 // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
-                safe_to_continue = MonitorTemperatures(PWM_MONITOR_PERIOD);
+                safe_to_continue = MonitorTemperatures(40); // Monitor values for 40 seconds. -- Number can be changed. 
                 if (!safe_to_continue){
                     // Could add a warning mechanism before shut down. ie 3 chances to cool down, otherwise shutdown.
                     current_flight_state = SHUTDOWN;
-                    // disconnectBattery()
+                    DisconnectBattery();
                     // sendShutdownMessage() Could be a LoRa function call?
                 break;
                 }
             }
             
             if (custom_timer_interrupt == true){
-                custom_timer_interrupt == false
+                custom_timer_interrupt == false;
 
                 duty_cycle = 0;
-                SpiModeetCoilPWM(duty_cycle);
+                SetCoilPWM(duty_cycle);
 
                 // start timer again in background.
 
@@ -743,7 +766,6 @@ void RecoveryMode() {
     }
     break;
 }
-
 
 /*
 Main code; should be kept as clean as possible.
@@ -812,6 +834,3 @@ int main(void) {
     }
 }
 
-
-
-// push test
