@@ -535,8 +535,8 @@ void SetupBMP() {
     pressure_data_ready = false;
 
     // Calibrate ground pressure witwh 100 samples.
-    ground_pressure = CalibrateGroundPressure(100);
-    initial_altitude = pressureToAltitude(float ground_pressure); 
+    //ground_pressure = CalibrateGroundPressure(100);
+    //initial_altitude = pressureToAltitude(float ground_pressure); 
 }
 
 void DisableBMP() {
@@ -568,9 +568,12 @@ volatile uint16_t adc_result;
 #define RTHERM 10000
 #define T0_K 298.15 //25 degrees Celsius in Kelvin 
 
+// All these thresholds are placeholder values!!! Must be checked and updated!!! 
 #define CURRENT_MAX 2.0   // Max current in Amps
+#define BATTERY_MAX 2.0
+#define CHAMBER_MAX 2.0
+
 #define R_SENSE 0.1       // Shunt resistor in Ohms
-// Values need to be checked 
 
 #define ADC_CHAM_THERM   ADCINCH_8    // P5.0 / A8
 #define ADC_BAT_THERM    ADCINCH_10   // P5.2 / A10
@@ -659,8 +662,9 @@ double CurrentSense () {
     // Current sense
     StartADC(ADC_CUR_SENSE);
     LPM0;
-    curSenseADC = adc_result;        
-    return double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current
+    curSenseADC = adc_result;       
+    double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current 
+    return current;
 }   
 
 /* Code to turn off current when it exceeds a threshold. HERE IF NEEDED. 
@@ -729,6 +733,7 @@ void RecoveryMode() {
         // Clear timer
         // start the timer
 
+        uint8_t duty_cycle = 0;
         SetCoilPWM(uint8_t duty_cycle);
 
         while (1){
@@ -736,35 +741,41 @@ void RecoveryMode() {
                 duty_cycle = 0;
                 SetCoilPWM(duty_cycle);
 
+                bool safe_to_continue = false;
                 // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
                 safe_to_continue = MonitorTemperatures(40); // Monitor values for 40 seconds. -- Number can be changed. 
+                // Warning mechanism. 3 chances to cool down, otherwise, shutdown. 
                 if (!safe_to_continue){
-                    // Could add a warning mechanism before shut down. ie 3 chances to cool down, otherwise shutdown.
-                    current_flight_state = SHUTDOWN;
-                    DisconnectBattery();
-                    // sendShutdownMessage() Could be a LoRa function call?
-                break;
+                    safe_to_continue = MonitorTemperatures(40);
+                    if (!safe_to_continue) {
+                        safe_to_continue = MonitorTemperatures(40);
+                        if (!safe_to_continue) {
+                            current_flight_state = SHUTDOWN;
+                            DisconnectBattery();
+                            // sendShutdownMessage() Could be a LoRa function call?
+                            // break at some point? 
+                        }
+                    }
                 }
             }
-            
-            if (custom_timer_interrupt == true){
-                custom_timer_interrupt == false;
-
-                duty_cycle = 0;
-                SetCoilPWM(duty_cycle);
-
-                // start timer again in background.
-
-                // LoRa in between
-
-                // check timer.
-
-                break;
-            }
-
         }
+        
+        // Getting to this point means values no longer exceeds threshold 
+        if (custom_timer_interrupt == true){
+            custom_timer_interrupt == false;
+
+            duty_cycle = 0;
+            SetCoilPWM(duty_cycle);
+
+            // start timer again in background.
+
+            // LoRa in between
+
+            // check timer.
+
+            break;
+        }         
     }
-    break;
 }
 
 /*
@@ -786,7 +797,7 @@ int main(void) {
     ConfigureBMP();
 
     ground_pressure = CalibrateGroundPressure(100);
-    initial_atitude = PressureToAltitude(ground_pressure);
+    initial_altitude = PressureToAltitude(ground_pressure);
 
     current_flight_state = PREFLIGHT;
 
@@ -824,12 +835,12 @@ int main(void) {
             case LANDED:
                 if (!recovery_active){
                     // Enter recovery
-                    recoveryMode();
+                    RecoveryMode();
                     recovery_active = true;
                 }
                 break;
-            case SHUTDOWN:
-                break
+            case SHUTDOWN;
+                break;
         }
     }
 }
