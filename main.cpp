@@ -473,7 +473,10 @@ void GetPressure() {
 */
 float PressureToAltitude(float pressure) {
     // return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula // eqn where??
-    return h_b + (T_b / L_b)*((pressure / P_b)^((-R * L_b) / (g_0 * M))-1); // Must use pow() here as "^" is a bit-wise OR
+
+    float altitude = h_b + (T_b / L_b)*((pressure / P_b)^((-R * L_b) / (g_0 * M))-1); // Must use pow() here as "^" is a bit-wise OR
+    AltWindow_Push(altitude);
+    return altitude;
 }
 
 /*
@@ -515,12 +518,20 @@ void UpdateFlightState() {
                 // if prev_flight_state != landed AND != FLIGHT
                     // current_flight = FLIGHT;
                     // prev_flight_state = PREFLIGHT;
+            if (delta > THRESHOLD_PLACEHOLDER){
+                current_flight_state = FLIGHT;
+                prev_flight_state = PREFLIGHT;
+            }
             break;
             
         case FLIGHT:
             // if current altitude and subsequence altitudes are ~= ground altitude AND accl ~ 0
                 // current_flight_state = LANDED;
                 // prev_flight_state = FLIGHT;
+            if (Delta within a stable THRESHOLD_PLACEHOLDER){
+                current_flight_state = LANDED;
+                prev_flight_state = FLIGHT;
+            }
             break;
 
         case LANDED:
