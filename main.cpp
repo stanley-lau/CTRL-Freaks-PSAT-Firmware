@@ -250,6 +250,7 @@ void UpdateACCLStatus() {
     }
 }
 
+// Check with data sheet on how this should be read and if the register's auto increment.
 // Return the acceleration magnitude 
 float ReadACCL() {
     //xh indicates high byte in the x axis. xl = low byte in the x axis. etc. 
@@ -393,6 +394,8 @@ void UpdateBMPStatus (void) {
     }
 }
 
+
+// Review burst reading, and see if the BMP's register's auto increment when being read.
 uint32_t readRawPressure() {
     uint8_t data0, data1, data2;
 
@@ -687,16 +690,58 @@ bool ChamExceedsThreshold() {
 
 // ------------ After landing ------------
 
-void vapeLoop () {
-    //Turn PWM on (set coil PWM @ X value)
-    SetCoilPWM(100);
 
-    __delay_cycles(100); 
+void RecoveryMode() {
+    // Turn off sensors
+    DisableBMP();
+    DisableACCL();
 
-    //Turn PWM off (set coil PWM @ 0)
-    SetCoilPWM(0);
+    // Delay 7.5min should occur
+    // enableBeacon() should happen aswell
 
-    __delay_cycles(100);
+    while(current_flight_state != SHUTDOWN){
+        // Clear timer
+        // start the timer
+
+
+        SetCoilPWM(uint8_t duty_cycle);
+
+        while (1){
+            if (CurrExceedThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()){
+                duty_cycle = 0;
+                SetCoilPWM(duty_cycle);
+
+                __delay_cycles(800000) // Set sampling frequency: 10 Hz sampling
+
+                // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
+                safe_to_continue = MonitorTemperatures(PWM_MONITOR_PERIOD);
+                if (!safe_to_continue){
+                    // Could add a warning mechanism before shut down. ie 3 chances to cool down, otherwise shutdown.
+                    current_flight_state = SHUTDOWN;
+                    // disconnectBattery()
+                    // sendShutdownMessage() Could be a LoRa function call?
+                break;
+                }
+            }
+            
+            if (custom_timer_interrupt == true){
+                custom_timer_interrupt == false
+
+                duty_cycle = 0;
+                SpiModeetCoilPWM(duty_cycle);
+
+                // start timer again in background.
+
+                // LoRa in between
+
+                // check timer.
+
+                break;
+            }
+
+        }
+    }
+    break;
 }
 
 
@@ -768,60 +813,5 @@ int main(void) {
 }
 
 
-// ------------ After landing ------------
-
-
-void RecoveryMode() {
-    // Turn off sensors
-    DisableBMP();
-    DisableACCL();
-
-    // Delay 7.5min should occur
-    // enableBeacon() should happen aswell
-
-    while(current_flight_state != SHUTDOWN){
-        // Clear timer
-        // start the timer
-
-
-        SetCoilPWM(uint8_t duty_cycle);
-
-        while (1){
-            if (CurrExceedThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()){
-                duty_cycle = 0;
-                SetCoilPWM(duty_cycle);
-
-                __delay_cycles(800000) // Set sampling frequency: 10 Hz sampling
-
-                // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
-                safe_to_continue = MonitorTemperatures(PWM_MONITOR_PERIOD);
-                if (!safe_to_continue){
-                    // Could add a warning mechanism before shut down. ie 3 chances to cool down, otherwise shutdown.
-                    current_flight_state = SHUTDOWN;
-                    // disconnectBattery()
-                    // sendShutdownMessage() Could be a LoRa function call?
-                break;
-                }
-            }
-            
-            if (custom_timer_interrupt == true){
-                custom_timer_interrupt == false
-
-                duty_cycle = 0;
-                SpiModeetCoilPWM(duty_cycle);
-
-                // start timer again in background.
-
-                // LoRa in between
-
-                // check timer.
-
-                break;
-            }
-
-        }
-    }
-    break;
-}
 
 // push test
