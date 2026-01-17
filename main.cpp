@@ -36,6 +36,18 @@ volatile uint8_t read_index = 0;
 volatile uint8_t available_samples = 0;
 
 
+// Struct for storing ALTITUDE only data.
+#define ALT_WINDOW 8   // 8 samples ≈ 160 ms @ 50 Hz
+
+typedef struct {
+    float buf[ALT_WINDOW];
+    uint8_t idx;
+    uint8_t count;
+} AltitudeWindow;
+
+AltitudeWindow altWin = {0};
+
+
 // Templates for BMP 
 Pin<P4,4> BMP_CS;
 Pin<P4,5> BMP_CLK;
@@ -492,6 +504,11 @@ float CalibrateGroundPressure(uint16_t samples) {
     This code should ultilse BOTH sensor's readings to determine the state 
 */
 void UpdateFlightState() {
+    float delta;
+    if (!AltWindow_GetDelta(&delta)){
+        return;
+    }
+
     switch (current_flight_state) {
         case PREFLIGHT:
             // if current altitudee jumps from ground altitude AND ACCL > 0;
@@ -548,6 +565,34 @@ void DisableBMP() {
     BMP_CS.setHigh();
 }
 
+
+/*
+== GPT CODE == 
+*/
+
+// AltWindow_Push takes an altitude value, alt, and appends it to the smaller sized circular array "altWin"
+void AltWindow_Push(float alt) {
+    altWin.buf[altWin.idx] = alt;
+    altWin.idx = (altWin.idx + 1) % ALT_WINDOW;
+
+    if (altWin.count < ALT_WINDOW)
+        altWin.count++;
+}
+
+// AltWindow_GetDelta takes a pointer to a variable "delta" and calculates the change in altitde which is stored in "delta"
+bool AltWindow_GetDelta(float *delta) {
+    if (altWin.count < ALT_WINDOW)
+        return false;  // Not enough data yet
+
+    uint8_t newest = (altWin.idx + ALT_WINDOW - 1) % ALT_WINDOW;
+    uint8_t oldest = altWin.idx;  // Next overwrite = oldest
+
+    *delta = altWin.buf[newest] - altWin.buf[oldest];
+    return true;
+}
+/*
+ == GPT CODE ==
+*/
 void DisableACCL() {
     //PWR_MGMT0 register
     ACCL_CS.setLow();
