@@ -7,63 +7,14 @@
 #include "hal/gpio.hpp"
 #include "hal/blocking_spi.hpp"
 
-// ==== Define Constants ==== //
+#include "pin_mappings.hpp"
+#include "bmp.hpp"
+#include "bmp_buffer.hpp"
+#include "accl.hpp"
 
+// ==== Define Constants ==== //
 // PWM
 #define PWM_PERIOD 500
-
-// Pressure-Altitude Conversion || https://www.mide.com/air-pressure-at-altitude-calculator
-#define P_b 101325              // Static pressure at sea level [Pa]
-#define T_b 288                 // Standard temp at sea level [K]
-#define L_b -0.0065             // Started temp lapse rate [K/m]
-#define h_b 0                   // height at the bottom of atmospheric layer [m]
-#define R 8.31432               // universal gas constant [Nm/molK]
-#define g_0 9.80665             // Gravity constant
-#define M 0.0289644             // Molar Mass of Earth's Air [kg/mol]
-
-// Circular buffer size for BMP
-#define BMP_BUFFER_SIZE 32
-
-// Struct for storing data
-typedef struct {
-    int32_t pressure;
-    int32_t temperature;
-} BMPData;
-
-volatile BMPData bmpBuffer[BMP_BUFFER_SIZE];
-volatile uint8_t write_index = 0;
-volatile uint8_t read_index = 0;
-volatile uint8_t available_samples = 0;
-
-
-// Struct for storing ALTITUDE only data.
-#define ALT_WINDOW 8   // 8 samples ≈ 160 ms @ 50 Hz
-
-typedef struct {
-    float buf[ALT_WINDOW];
-    uint8_t idx;
-    uint8_t count;
-} AltitudeWindow;
-
-AltitudeWindow altWin = {0};
-
-
-// Templates for BMP 
-Pin<P4,4> BMP_CS;
-Pin<P4,5> BMP_CLK;
-Pin<P4,6> BMP_MOSI;
-Pin<P4,7> BMP_MISO;
-SpiMaster<SPI_B1> BMP_SPI;
-Pin<P2,4> BMP_INT;
-
-// Templates for ACCL 
-Pin<P4,0> ACCL_CS;
-Pin<P4,1> ACCL_CLK;
-Pin<P4,2> ACCL_MOSI;
-Pin<P4,3> ACCL_MISO;
-SpiMaster<SPI_A1> ACCL_SPI; //CHECK on datasheet
-Pin<P6,0> ACCL_INT1;
-Pin<P2,3> ACCL_INT2;
 
 // ==== Interrupts ==== //
 
@@ -79,6 +30,7 @@ __interrupt void PORT2_ISR(void) {
 }
 
 // ADC Interrupt: interrupt that read ADC memory
+volatile uint16_t adc_result;
     #pragma vector=ADC_VECTOR
 __interrupt void ADC_ISR(void) {
     switch (__even_in_range(ADCIV, ADCIV__ADCIFG0))
@@ -91,6 +43,14 @@ __interrupt void ADC_ISR(void) {
             break;
     }
 }
+
+// ==== FlightStates ==== // 
+enum FlightState {PREFLIGHT, FLIGHT, LANDED, SHUTDOWN };
+enum FlightState current_flight_state = PREFLIGHT;
+enum FlightState prev_flight_state;
+
+float ground_pressure = 0.0f;
+float initial_altitude = 0.0f;
 
 // InitCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
@@ -131,383 +91,13 @@ void SetCoilPWM(uint8_t duty_cycle) {
     }
 }
 
-// Accl SPI pins are routed incorrectly. Cannot be resolved in software. Function written assuming routing is correctly
-// InitACCL initialises SPI functionality 
-void InitACCL() {
-    /*
-    Assumes:
-    P4.0 = ACCL_CS
-    P4.1 = ACCL_CLK
-    P4.2 = ACCL_MISO (SOMI) (incorrect on schematic)
-    P4.3 = ACCL_MOSI (SIMO) (incorrect on schematic)
-
-    P6.0 = ACCL_INT1
-    P2.3 = ACCL_INT2
-    */
-    
-    // Configure Pin function for ACCL by setting them to Primary Module function (CLK, SOMI, SIMO)
-    P4SEL0 |= BIT1 | BIT2 | BIT3;            // Set bit0
-    P4SEL1 &= ~(BIT1 | BIT2 | BIT3);         // Clear bit1
-
-    // Configure CS pin as GPIO
-    P4SEL0 &= ~BIT0;
-    P4SEL1 &= ~BIT0;
-    
-    // Configure CS pin as Output, and Pulling it HIGH (Active LOW)
-    P4OUT |= BIT0;                           // Pull CS High
-    P4DIR |= BIT0;                           // Set BIT0 of P4DIR to 1. (1 = Output) BIT0 Corresponds to PIN 0 on the Port.
-    
-
-    // Configure Interrupts by setting them as INPUT pins.
-    P6DIR &= ~BIT0;                         // Clear Bit 0 in P6DIR to set P6.0 as input
-    P6IES &= ~BIT0;                         // Rising edge trigger (active HIGH)
-    P6IFG &= ~BIT0;                         // Clear flag
-    P6IE  |=  BIT0;                         // Enable interrupt
-
-    P2DIR &= ~BIT3;                         // Clear Bit 3 in P2DIR to set P2.3 as input
-    P2IES &= ~BIT3;                         // Rising edge (active HIGH)
-    P2IFG &= ~BIT3;                         // Clear flag
-    P2IE  |=  BIT3;                         // Enable interrupt
-
-    // Init SPI specifications. 
-    UCA1CTLW0 = UCSWRST;                                // Hold in RESET data to allow modification of UCA1CTLW0
-    UCA1CTLW0 |=    UCMSB   |       UCSYNC     |    UCMST;      
-    //        |= MSB First, | Synchronous mode | Master mode
-    UCA1CTLW0 |= UCSSEL__SMCLK;                         // Seledt SMCLK as Clock
-    UCA1BRW = 8;                                        // SPI CLK -> SMCLK/8 (Clock prescaler)
-    UCA1CTLW0 &= ~UCSWRST;                              // Release RESET to allow the operation of SPI module
-
-    /*
-    Notes:
-    Look to set clock phase and polarity to match the sensor's SPI timing
-    UCA1CTLW0 &= ~(UCCKPL | UCCKPH);       // CPOL = 0, CPHA = 0 -> MODE 0
-
-    To do:
-    Configure ACCL by writing to its registers
-    Configure INT behaviour on ACCL to Polarity = Active HIGH, Drive = PUSH PULL, Mode= Latched. 
-    Must be done after initAccl() via SPI writes.
-    */
-}
-
-void ConfigureACCL() {
-    //PWR_MGMT0 register
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x1F & 0x7F);  
-        ACCL_SPI.writeByte((1 << 0) | (1 << 1));         // Make 0, 1 = 1 --> Places accelerometer in Low Noise (LN) Mode
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-    __delay_cycles(500);                  // Small safety delay
-
-    //INT_CONFIG register
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x06 & 0x7F);  // Bit 7 (MSB) = 0 --> write mode 
-        ACCL_SPI.writeByte(0x3F);         // = 0011 1111 = INT1: active high, push-pull, latched, INT2: active high, push-pull, latched
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-    __delay_cycles(500);               
-
-    //INT_SOURCE0 register
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x2B & 0x7F);   
-        ACCL_SPI.writeByte(1 << 3);       // Make bit 3 = 1 --> Data ready interrupt routed to INT1
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-    __delay_cycles(500);          
-
-    //WOM_CONFIG register
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x27 & 0x7F);   
-        ACCL_SPI.writeByte(1 << 0);       // Make bit 0 = 1 --> Wake On Motion (WOM) enabled 
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-    __delay_cycles(500); 
-
-    //INT_SOURCE4 register
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x2E & 0x7F);   
-        ACCL_SPI.writeByte((1 << 0) | (1 << 1) | (1 << 2));       // Make bit 0, 1, 2 = 1 --> X, Y, Z axis WOM routed to INT2
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-    __delay_cycles(500);
-
-    //INT_CONFIG0 register
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x04 & 0x7F);   
-        ACCL_SPI.writeByte((1 << 5) | (0 << 4));       // Make bit 5 = 1, bit 4 = 0 --> Data ready interrupt cleared on sensor register read
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-    __delay_cycles(500);
-
-    //ACCEL_CONFIG0 register
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x21 & 0x7F);   
-        ACCL_SPI.writeByte((0 << 5) | (0 << 6));       // Make bit 5 and 6 = 0 --> Accelerometer output = ±16g full-scale
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-    __delay_cycles(500);
-
-}
-
-volatile bool ACCLReadyFlag = false;
-void UpdateACCLStatus() {
-    uint8_t int_status_drdys;
-
-    // "INT_STATUS_DRDYS" register 
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x39 | 0x80);    // ORing with 0x08 forces bit 7 = 1 --> reading register mode. Register is cleared.
-        int_status = ACCL_SPI.readByte();   // Sends dummy byte to clock data out
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-
-    // Checking for data ready interrupt in the INT_STATUS register
-    if (int_status_drdys & (1 << 0)) {      // Bit 0 is automatically sets to 1 when a Data Ready interrupt is generated
-        ACCLReadyFlag = true;               // Data is ready. After register has been read, bit 0 is set to 0. 
-    }
-}
-
-// Check with data sheet on how this should be read and if the register's auto increment.
-// Return the acceleration magnitude 
-float ReadACCL() {
-    //xh indicates high byte in the x axis. xl = low byte in the x axis. etc. 
-    uint8_t xh, xl, yh, yl, zh, zl;
-    //Raw acceleration values in the x, y, z directions 
-    int16_t ax_raw, ay_raw, az_raw;
-    float ax, ay, az;
-
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x0B | 0x80);  // Reading ACCEL_DATA_X1 register 
-        xh = ACCL_SPI.readByte();
-        ACCL_SPI.writeByte(0x0C | 0x80);  // Reading ACCEL_DATA_X0 register 
-        xl = ACCL_SPI.readByte();
-        ACCL_SPI.writeByte(0x0D | 0x80);  // Reading ACCEL_DATA_Y1 register 
-        yh = ACCL_SPI.readByte();
-        ACCL_SPI.writeByte(0x0E | 0x80);  // Reading ACCEL_DATA_Y0 register 
-        yl = ACCL_SPI.readByte();
-        ACCL_SPI.writeByte(0x0F | 0x80);  // Reading ACCEL_DATA_Z1 register 
-        zh = ACCL_SPI.readByte();
-        ACCL_SPI.writeByte(0x10 | 0x80);  // Reading ACCEL_DATA_Z0 register 
-        zl = ACCL_SPI.readByte();
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-
-    // Combine high + low bytes of x, y, z axis 
-    ax_raw = (int16_t)((xh << 8) | xl);
-    ay_raw = (int16_t)((yh << 8) | yl);
-    az_raw = (int16_t)((zh << 8) | zl);
-
-    // Convert to g using ±16g full-scale
-    ax = ax_raw / 2048.0f;
-    ay = ay_raw / 2048.0f;
-    az = az_raw / 2048.0f;
-
-    // Magnitude of acceleration vector
-    return sqrtf(ax*ax + ay*ay + az*az);
-}
-
-void InitBMP() {
-    // Configure GPIO for SPI mode
-    BMP_MOSI.function(PinFunction::Primary);
-    BMP_MISO.function(PinFunction::Primary);
-    BMP_CLK.function(PinFunction::Primary);
-    BMP_CS.toOutput().setHigh(); // Chip select
-
-    // Enable BMP interupts;
-    BMP_INT.toOutput().risingEdgeTrigger().enableInterrupt();
-
-    gpioUnlock();
-
-    // Initialise BMP's SPI
-    BMP_SPI.init(SpiMode::MODE_0(), ClockSource::Smclk, 1);
-
-}
-
-// ----------------------- Jenny's BMP code  -----------------------
-bool data_ready_interrupt = false;
-bool pressure_data_ready  = false;
-
-// Initialise enums;
-enum FlightState {PREFLIGHT, FLIGHT, LANDED, SHUTDOWN };
-// Create variable "current_flight_state" of type "FlightState", and set to "PREFLIGHT"
-enum FlightState current_flight_state = PREFLIGHT;
-
-float ground_pressure = 0.0f;
-float initial_altitude = 0.0f;
-
-void ConfigureBMP() {  
-    data_ready_interrupt = false;     // Flags are cleared every time function is called. 
-    pressure_data_ready  = false;
-
-
-    // "INT_CTRL" register
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x19 & 0x7F);         // AND-ing reg 0x19 with 0x7F forces bit 7 = 0, indicating a write operation.
-        BMP_SPI.writeByte(0x76);   // 0111 0110 --> (right to left: push-pull, active_high INT pin, enable latching, disable FIFO watermark, enable FIFO interrupt, barometer interrupt pin high, enable temperature/pressure data ready) 
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-    
-    // "IF_CONF" register
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1A & 0x7F);   
-        BMP_SPI.writeByte(0x00);   // bit0 = 0 --> SPI 4-wire mode
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-
-    // "PWR_CTRL" register
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1B & 0x7F);   // register address (write)  "0x1B" = "0001 1011". To the BMP390, this means PWR_CTRL Register
-        BMP_SPI.writeByte(0x33);   // register value --> 0011 0011 --> (right to left: enable pressure sensor, enable temperature sensor, 0,0 normal mode (11), 0, 0)
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-
-    // "OSR" register
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1C & 0x7F);   
-        BMP_SPI.writeByte(0x03);   // 0000 0011 --> 8x oversampling pressure measurement
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-
-    // "ODR" register
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1D & 0x7F);  
-        BMP_SPI.writeByte(0x02);   // 0x02 --> 20ms sampling period
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-}
-
-void UpdateBMPStatus (void) {
-    uint8_t int_status;  
-    uint8_t status;
-
-    // "INT_STATUS" register 
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x11 | 0x80);   // ORing with 0x08 forces bit 7 = 1 --> reading register mode. Register is cleared.
-        int_status = BMP_SPI.readByte();   // Sends dummy byte to clock data out
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-
-    // Checking for data ready interrupt in the INT_STATUS register
-    if (int_status & (1 << 3)) {           // 1<<3  == 0000 1000
-        data_ready_interrupt = true;        // Currently unused
-    }
-    
-
-    /* I can't find a reason to read this in the datasheet. Except for the fact that it tells us that pressure sensor data is ready. */
-
-    // "STATUS" register 
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x03 | 0x80);   // Reading STATUS
-        status = BMP_SPI.readByte();
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-
-    // Checking if pressure sensor data is ready 
-    if (status & (1 << 5)) {
-        pressure_data_ready = true;
-    }
-    if (status & (1 << 5)){
-        
-    }
-}
-
-// Review burst reading, and see if the BMP's register's auto increment when being read.
-uint32_t readRawPressure() {
-    uint8_t data0, data1, data2;
-
-    BMP_CS.setLow();
-    BMP_SPI.writeByte(0x04 | 0x80);      // start at DATA_0. Pressure data is stored from 0x04 to 0x06
-        data0 = BMP_SPI.readByte();      // Reading 0x04, PRESS_XLSB
-    BMP_SPI.writeByte(0x05 | 0x80);
-        data1 = BMP_SPI.readByte();      // Reading 0x05, PRESS_LSB
-    BMP_SPI.writeByte(0x06 | 0x80);
-        data2 = BMP_SPI.readByte();      // Reading 0x06, PRESS_MSB
-    BMP_SPI.flush();
-    BMP_CS.setHigh();
-
-    return ((uint32_t)data2 << 16) | ((uint32_t)data1 << 8) | data0; 
-}
-
-/* bmpReadSample() ...
-    - combines updateBMPStatus() and readRawPressure into one function()
-    - should be called in main() when the variable "bmp_data_ready" is = true;
-    - clears the INT_STATUS register by reading from it
-    - Reads 6 consecutive registers (Press + temp)
-    - Should store the data somewhere
-*/
-void GetPressure() {
-    uint8_t int_status;  
-    // Clear BMP's interrupt flag by reading from it.
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x11 | 0x80);   // ORing with 0x08 forces bit 7 = 1 --> reading register mode. Register is cleared.
-        int_status = BMP_SPI.readByte();   // Sends dummy byte to clock data out
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-
-    // Read from pressure sensor + temperature sensor
-    uint8_t buf[6];
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x04 | 0x80); // PRESSURE_XL
-        for(int i = 0; i < 6; i++){
-            buf[i] = BMP_SPI.readByte();
-        }
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-
-    // Convert and store in circular buffer
-    bmpBuffer[write_index].pressure = ((uint32_t)buf[2] << 16) | ((uint32_t)buf[1] << 8) | buf[0];
-    bmpBuffer[write_index].temperature = ((uint32_t)buf[5] << 16) | ((uint32_t)buf[4] << 8) | buf[3];
-
-    /*
-    Data is stored like this:
-    bmpBuffer[0] = {pressure_sample0, temperature_sample0}
-    bmpBuffer[1] = {pressure_sample1, temperature_sample1}
-    bmpBuffer[2] = {pressure_sample2, temperature_sample2}
-    */
-
-    // Update circular buffer indices
-    write_index = (write_index + 1) % BMP_BUFFER_SIZE;
-    if (available_samples < BMP_BUFFER_SIZE) available_samples++;
-}
-
-/*
-    pressureToAltitude() converts pressure [Pa] into heigh above sea level [m], and returns the result.
-*/
-float PressureToAltitude(float pressure) {
-    // return 44330.0f * (1.0f - powf(pressure / p0, 0.1903f)); // Using barometric formula // eqn where??
-
-    float altitude = h_b + (T_b / L_b)*((pressure / P_b)^((-R * L_b) / (g_0 * M))-1); // Must use pow() here as "^" is a bit-wise OR
-    AltWindow_Push(altitude);
-    return altitude;
-}
-
-/*
-    calibrateGroundPressure takes X samples, calculates the average pressure, and returns the result.
-    Polling approach ass
-*/
-float CalibrateGroundPressure(uint16_t samples) {
-    float sum = 0.0f;
-    uint16_t collected = 0;
-
-    // Rereads the status register and refreshes data every time 
-    while (collected < samples) {
-        UpdateBMPStatus();
-
-        if (pressure_data_ready) {
-            sum += (float)readRawPressure();
-            collected++;
-            pressure_data_ready = false;  //Reset pressure_data_ready back to false after reading data.
-        }
-        __delay_ms(10);
-    }
-
-    return sum / samples;  // Return average pressure [Pa] of 100 samples 
-}
-
 /*
     Modified from updateFlightState();
     This code should ultilse BOTH sensor's readings to determine the state 
 */
 void UpdateFlightState() {
     float delta;
+    
     if (!AltWindow_GetDelta(&delta)){
         return;
     }
@@ -543,79 +133,11 @@ void UpdateFlightState() {
     }
 }
 
-/*
-    SetupBMP, im guessing, should complete all the initialations, configs, and setups, required for the BMP to function during flight.
-    This should be called once at the start of the main() function.
-*/
-void SetupBMP() {
-    // Initialise MCU pins for BMP SPI
-    InitBMP();
-    
-    // Configure BMP's internal registers.
-    ConfigureBMP();
 
-    // Polling approaching is okay during pre-flight phase. Poll until Pressure_data_ready is true.
-    do {
-        UpdateBMPStatus();
-    } while (!pressure_data_ready);
-
-    // Reset flag after loop exits.
-    pressure_data_ready = false;
-
-    // Calibrate ground pressure witwh 100 samples.
-    //ground_pressure = CalibrateGroundPressure(100);
-    //initial_altitude = pressureToAltitude(float ground_pressure); 
-}
-
-void DisableBMP() {
-    // "PWR_CTRL" register
-    BMP_CS.setLow();
-        BMP_SPI.writeByte(0x1B & 0x7F);   // register address (write)  "0x1B" = "0001 1011". To the BMP390, this means PWR_CTRL Register
-        BMP_SPI.writeByte(0x00);          // Sleep mode: disable the temperature and pressure sensor 
-        BMP_SPI.flush();
-    BMP_CS.setHigh();
-}
-
-
-/*
-== GPT CODE == 
-*/
-
-// AltWindow_Push takes an altitude value, alt, and appends it to the smaller sized circular array "altWin"
-void AltWindow_Push(float alt) {
-    altWin.buf[altWin.idx] = alt;
-    altWin.idx = (altWin.idx + 1) % ALT_WINDOW;
-
-    if (altWin.count < ALT_WINDOW)
-        altWin.count++;
-}
-
-// AltWindow_GetDelta takes a pointer to a variable "delta" and calculates the change in altitde which is stored in "delta"
-bool AltWindow_GetDelta(float *delta) {
-    if (altWin.count < ALT_WINDOW)
-        return false;  // Not enough data yet
-
-    uint8_t newest = (altWin.idx + ALT_WINDOW - 1) % ALT_WINDOW;
-    uint8_t oldest = altWin.idx;  // Next overwrite = oldest
-
-    *delta = altWin.buf[newest] - altWin.buf[oldest];
-    return true;
-}
-/*
- == GPT CODE ==
-*/
-void DisableACCL() {
-    //PWR_MGMT0 register
-    ACCL_CS.setLow();
-        ACCL_SPI.writeByte(0x1F & 0x7F);  
-        ACCL_SPI.writeByte(0x00);         // Turns accelerometer and gyroscope off
-        ACCL_SPI.flush();
-    ACCL_CS.setHigh();
-}
 
 /* -------------------------------ADC------------------------------- */
 
-volatile uint16_t adc_result;
+
 
 #define ADCMAX 4095.00 //Correlating to 12 bits
 #define VREF  2.5
@@ -790,10 +312,10 @@ void RecoveryMode() {
         // start the timer
 
         uint8_t duty_cycle = 0;
-        SetCoilPWM(uint8_t duty_cycle);
+        SetCoilPWM(duty_cycle);
 
         while (1){
-            if (CurrExceedThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()){
+            if (CurrExceedsThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()){
                 duty_cycle = 0;
                 SetCoilPWM(duty_cycle);
 
@@ -863,21 +385,30 @@ int main(void) {
 
     while(1){
         /*
-
         Read from sensors here
-        
         */
 
-        if (available_samples > 0) {
-            BMPData s = bmpBuffer[read_index];
-            read_index = (read_index + 1) % BMP_BUFFER_SIZE;
-            available_samples--;
+        // 1. Check if new BMP sample ready
+        if (bmp_data_ready) {
+            bmp_data_ready = false;
+            GetPressure();
+                if (available_samples > 0) {
+                    // read the next sample from buffer
+                    BMPData raw = bmpBuffer[read_index]; // RAW WTF???
 
-            sample.altitude = pressureToAltitude(s.pressure);
-            pushAltitude(sample.altitude);              // fills altitude window
-            sample.vertical_velocity = getVerticalSpeed();
-            have_sample = true;
+                    // advance read_index and decrease available_samples
+                    read_index = (read_index + 1) % BMP_BUFFER_SIZE;
+                    available_samples--;
+
+                    // convert to altitude and push to sliding window
+                    float altitude = PressureToAltitude(raw.pressure);
+                    AltWindow_Push(altitude);
+
+                    // float altitude = PressureToAltitude(bmpBuffer[read_index].pressure);
+                    // AltWindow_Push(altitude);
+                }
         }
+
 
         // Update Flight State // should pass in small sample of data for flight determination.
         UpdateFlightState();
@@ -895,7 +426,7 @@ int main(void) {
                     recovery_active = true;
                 }
                 break;
-            case SHUTDOWN;
+            case SHUTDOWN:
                 break;
         }
     }
