@@ -2,7 +2,7 @@
 #include <msp430.h>
 #include <stdint.h>
 #include "util.h"
-// Add #include <math.h> 
+#include <math.h> 
 
 #include "hal/gpio.hpp"
 #include "hal/blocking_spi.hpp"
@@ -50,8 +50,11 @@ volatile bool custom_timer_interrupt = false;
 __interrupt void TIMER0_B0_ISR(void) {
     custom_timer_interrupt = true;
 
+    // undefined variables
+    /*
     DINT; // Disable interrupt
     TACLR = 1; //Clear TAxR, clock divider state, and the counter direction.
+    */
 }
 
 // ==== FlightStates ==== // 
@@ -331,7 +334,7 @@ void TimerInterrupt(uint16_t delay_cycles) {
     TB0CCTL0 = CCIE;                // Enable CCR0 interrupt
 
     TB0CTL = TBSSEL__SMCLK           // SMCLK source
-           | MC__UP                  // Up mode
+           | MC__UP;                  // Up mode
 }
 
 
@@ -433,7 +436,8 @@ int main(void) {
             GetPressure();
                 if (available_samples > 0) {
                     // read the next sample from buffer
-                    BMPData raw = bmpBuffer[read_index]; // RAW WTF???
+                    //BMPData raw = bmpBuffer[read_index]; // RAW WTF???
+                    const volatile BMPData& raw = bmpBuffer[read_index];
                     //I think this is meant to be raw_pressure?
 
                     // advance read_index and decrease available_samples
