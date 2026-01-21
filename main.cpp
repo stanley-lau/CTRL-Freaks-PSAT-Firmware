@@ -33,15 +33,25 @@ __interrupt void PORT2_ISR(void) {
 volatile uint16_t adc_result;
     #pragma vector=ADC_VECTOR
 __interrupt void ADC_ISR(void) {
-    switch (__even_in_range(ADCIV, ADCIV__ADCIFG0))
+    switch (__even_in_range(ADCIV, 0x0C)) //Interrupt Source: ADC memory Interrupt flag; Interrupt Flag: ADCIFG0
     {
-        case ADCIV__ADCIFG0:
+        case 0x0C:
             adc_result = ADCMEM0;   // Read ADC result
             LPM0_EXIT;             // Wakes up CPU
             break;
         default:
             break;
     }
+}
+
+// Timer Interrupt: Interrupt that triggers to elapse an amount of time 
+volatile bool custom_timer_interrupt = false;
+#pragma vector = TIMER0_B0_VECTOR
+__interrupt void TIMER0_B0_ISR(void) {
+    custom_timer_interrupt = true;
+
+    DINT; // Disable interrupt
+    TACLR = 1; //Clear TAxR, clock divider state, and the counter direction.
 }
 
 // ==== FlightStates ==== // 
@@ -91,6 +101,9 @@ void SetCoilPWM(uint8_t duty_cycle) {
     }
 }
 
+// Both placeholder value that should be checked 
+#define ACCL_THRESHOLD        5 
+#define ALTITUDE_THRESHOLD    5  
 /*
     Modified from updateFlightState();
     This code should ultilse BOTH sensor's readings to determine the state 
@@ -102,37 +115,35 @@ void UpdateFlightState() {
         return;
     }
 
+    float accl_magnitude = ReadACCL();
+
     switch (current_flight_state) {
+        
         case PREFLIGHT:
-            // if current altitudee jumps from ground altitude AND ACCL > 0;
-                // if prev_flight_state != landed AND != FLIGHT
-                    // current_flight = FLIGHT;
-                    // prev_flight_state = PREFLIGHT;
-            if (delta > THRESHOLD_PLACEHOLDER){
-                current_flight_state = FLIGHT;
+        // Detect launch: altitude change (current altitude jumps from ground altitude_ + movement (acceleration value > 0)
+            if (delta > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
                 prev_flight_state = PREFLIGHT;
+                current_flight_state = FLIGHT;
             }
             break;
             
         case FLIGHT:
-            // if current altitude and subsequence altitudes are ~= ground altitude AND accl ~ 0
-                // current_flight_state = LANDED;
-                // prev_flight_state = FLIGHT;
-            if (Delta within a stable THRESHOLD_PLACEHOLDER){
-                current_flight_state = LANDED;
+        // Detect landing: altitude change small/altitude approx ground altitude AND near-zero acceleration
+            if (delta < ALTITUDE_THRESHOLD && accl_magnitude < ACCL_THRESHOLD) {
                 prev_flight_state = FLIGHT;
+                current_flight_state = LANDED;
             }
             break;
 
         case LANDED:
             // do nothing;
+            // Stay here to run recovery mode or manual shutdown 
             break;
             
         case SHUTDOWN:
             break;
     }
 }
-
 
 
 /* -------------------------------ADC------------------------------- */
@@ -295,21 +306,48 @@ bool MonitorTemperatures(uint16_t monitor_seconds)
     return false;
 }
 
+void DelaySeconds(uint16_t seconds) {
+    for (uint16_t i = 0; i < seconds; i++) {
+        __delay_cycles(1000000);  // 1 second at 1 MHz
+    }
+}
+
 void DisconnectBattery() {
     P5OUT &= ~BIT2;   // Turn port 5.2 / battery OFF 
 }
+
+void EnableBeacon () { // Need to write code for this 
+
+}
+
+//Should check code hmm
+void TimerInterrupt(uint16_t delay_cycles) {
+    custom_timer_interrupt = false;
+
+    TB0CTL = TBCLR;                 // Clear timer
+
+    TB0CCR0 = delay_cycles;         // Fire interrupt when counter reaches this
+
+    TB0CCTL0 = CCIE;                // Enable CCR0 interrupt
+
+    TB0CTL = TBSSEL__SMCLK           // SMCLK source
+           | MC__UP                  // Up mode
+}
+
 
 void RecoveryMode() {
     // Turn off sensors
     DisableBMP();
     DisableACCL();
 
-    // Delay 7.5min should occur
-    // enableBeacon() should happen aswell
+    __enable_interrupt();
+
+    DelaySeconds(450); //Delay by 7.5 minutes 
+    EnableBeacon(); // Function has not been written yet 
 
     while(current_flight_state != SHUTDOWN){
-        // Clear timer
-        // start the timer
+        TB0CTL = TBCLR;        // Clear the timer by resetting timer counter to 0
+        TimerInterrupt(50000); // Starting the timer interrupt. Value in unit of microsecond. 16bit--> max = 65,535 = 65ms
 
         uint8_t duty_cycle = 0;
         SetCoilPWM(duty_cycle);
@@ -331,28 +369,29 @@ void RecoveryMode() {
                             current_flight_state = SHUTDOWN;
                             DisconnectBattery();
                             // sendShutdownMessage() Could be a LoRa function call?
-                            // break at some point? 
+                            break; 
                         }
                     }
                 }
             }
+
+            // Still within while(1) loop 
+            // Getting to this point means values no longer exceeds threshold 
+            if (custom_timer_interrupt == true){
+                custom_timer_interrupt == false;
+
+                duty_cycle = 0;
+                SetCoilPWM(duty_cycle);
+
+                TimerInterrupt(50000); // start timer again in background.
+
+                // LoRa in between
+
+                // check timer.
+
+                break;
+            }         
         }
-        
-        // Getting to this point means values no longer exceeds threshold 
-        if (custom_timer_interrupt == true){
-            custom_timer_interrupt == false;
-
-            duty_cycle = 0;
-            SetCoilPWM(duty_cycle);
-
-            // start timer again in background.
-
-            // LoRa in between
-
-            // check timer.
-
-            break;
-        }         
     }
 }
 
@@ -395,17 +434,16 @@ int main(void) {
                 if (available_samples > 0) {
                     // read the next sample from buffer
                     BMPData raw = bmpBuffer[read_index]; // RAW WTF???
+                    //I think this is meant to be raw_pressure?
 
                     // advance read_index and decrease available_samples
                     read_index = (read_index + 1) % BMP_BUFFER_SIZE;
                     available_samples--;
 
                     // convert to altitude and push to sliding window
-                    float altitude = PressureToAltitude(raw.pressure);
-                    AltWindow_Push(altitude);
-
                     // float altitude = PressureToAltitude(bmpBuffer[read_index].pressure);
-                    // AltWindow_Push(altitude);
+                    float altitude = PressureToAltitude(raw.pressure); //This is meant to raw_pressure?
+                    AltWindow_Push(altitude);
                 }
         }
 
