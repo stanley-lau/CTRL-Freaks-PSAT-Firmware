@@ -51,7 +51,7 @@ __interrupt void TIMER0_B0_ISR(void) {
     custom_timer_interrupt = true;
 
     TB0CCTL0 &= ~CCIE;     // Disable interrupt 
-    TA0CTL |= 0x04;       // Manually set TACLR (bit 2) = 1. This clears the timer. 
+    //TA0CTL |= 0x04;       // Manually set TACLR (bit 2) = 1. This clears the timer. 
 
     // undefined variables
     /*
@@ -407,79 +407,218 @@ void RecoveryMode() {
     }
 }
 
+
+// ====== Working Background Timer Dump ====== //
+
+// Global variables
+volatile uint16_t delay_seconds = 0;
+volatile uint8_t timer_expired = 0;
+
+// Call the function to set an X second counter in the BACKGROUND
+void start_delay_seconds(uint16_t seconds)
+{
+    __disable_interrupt();
+    delay_seconds = seconds;
+    timer_expired = 0;
+    __enable_interrupt();
+}
+
+// Init Timer_B for 1 second tick
+void Timer3_init_1s_tick(void)
+{
+    TB3CTL = TBSSEL__ACLK | MC__UP | TBCLR;
+    TB3CCR0 = 32768 - 1;     // 1 second
+    TB3CCTL0 = CCIE;
+}
+
+// ISR
+#pragma vector = TIMER3_B0_VECTOR
+__interrupt void Timer3_B0_ISR(void)
+{
+    if (delay_seconds > 0)
+    {
+        delay_seconds--;
+
+        if (delay_seconds == 0)
+        {
+            timer_expired = 1;
+        }
+    }
+}
+
+// Example Template of Background Timer in main()
+/*
+    WDTCTL = WDTPW | WDTHOLD;
+
+        Timer3_init_1s_tick();
+        __enable_interrupt();
+
+        start_delay_seconds(600);   // start 10-minute timer
+
+        while (1)
+        {
+            if (timer_expired)
+            {
+                timer_expired = 0;
+                // do the thing after 10 minutes
+
+                // You can Rearm the timer here byt calling start_delay_seconds(6000) here for example.
+            }
+
+            // other background work here
+            // state machines, IO, comms, etc.
+        }
+
+*/
+
+// ====== Working Background Timer Dump ====== //
+
+#define RED_LED BIT0
+#define GREEN_LED BIT6
+
 /*
 Main code; should be kept as clean as possible.
 */
 
+
+
 int main(void) {
-    bool recovery_active = false;
+    // bool recovery_active = false;
 
-    // LoRa
+    // // LoRa
     
-    InitADC();
+    // InitADC();
+    // InitCoilPWM();
+
+    // InitACCL();
+    // ConfigureACCL();
+
+    // InitBMP();
+    // ConfigureBMP();
+
+    // ground_pressure = CalibrateGroundPressure(100);
+    // initial_altitude = PressureToAltitude(ground_pressure);
+
+    // current_flight_state = PREFLIGHT;
+
+    // // LoRa to ensure init was done succesfully 
+
+    // __enable_interrupt(); 
+
+    // while(1){
+    //     /*
+    //     Read from sensors here
+    //     */
+
+    //     // 1. Check if new BMP sample ready
+    //     if (bmp_data_ready) {
+    //         bmp_data_ready = false;
+    //         GetPressure();
+    //             if (available_samples > 0) {
+    //                 // read the next sample from buffer
+    //                 //BMPData raw = bmpBuffer[read_index]; // RAW WTF???
+    //                 const volatile BMPData& raw = bmpBuffer[read_index];
+    //                 //I think this is meant to be raw_pressure?
+
+    //                 // advance read_index and decrease available_samples
+    //                 read_index = (read_index + 1) % BMP_BUFFER_SIZE;
+    //                 available_samples--;
+
+    //                 // convert to altitude and push to sliding window
+    //                 // float altitude = PressureToAltitude(bmpBuffer[read_index].pressure);
+    //                 float altitude = PressureToAltitude(raw.pressure); //This is meant to raw_pressure?
+    //                 AltWindow_Push(altitude);
+    //             }
+    //     }
+
+
+    //     // Update Flight State // should pass in small sample of data for flight determination.
+    //     UpdateFlightState();
+
+    //     // State-depened behaviour
+    //     switch (current_flight_state) {
+    //         case PREFLIGHT:
+    //             break;
+    //         case FLIGHT:
+    //             break;
+    //         case LANDED:
+    //             if (!recovery_active){
+    //                 // Enter recovery
+    //                 RecoveryMode();
+    //                 recovery_active = true;
+    //             }
+    //             break;
+    //         case SHUTDOWN:
+    //             break;
+    //     }
+    // }
+
+
+    /*
+    WDTCTL = WDTPW + WDTHOLD; // Stop WDT
     InitCoilPWM();
+    
+    while (1)
+	{
+		for (uint16_t i = 0; i < 100; i++)
+		{
+            SetCoilPWM(i);
+            __delay_cycles(10 * PWM_PERIOD);
+		}
+		for (uint16_t i = 100; i > 0; i--)
+		{
+			SetCoilPWM(i);
+            __delay_cycles(10 * PWM_PERIOD);
+		}
+	}
+    */
 
-    InitACCL();
-    ConfigureACCL();
+    WDTCTL = WDTPW | WDTHOLD;
 
-    InitBMP();
-    ConfigureBMP();
+    // Init timer
+    Timer3_init_1s_tick();
 
-    ground_pressure = CalibrateGroundPressure(100);
-    initial_altitude = PressureToAltitude(ground_pressure);
+    // Init PWM
+    InitCoilPWM();
+    
+    // Init LEDs
+    P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
+    P6DIR |= GREEN_LED;
 
-    current_flight_state = PREFLIGHT;
+    // Turn LEDs off.
+    P1OUT &= ~RED_LED;
+    P6OUT &= ~GREEN_LED;
 
-    // LoRa to ensure init was done succesfully 
+    __enable_interrupt();
 
-    __enable_interrupt(); 
 
-    while(1){
-        /*
-        Read from sensors here
-        */
+    // Being 1-minute timer
+    start_delay_seconds(60);   // start 1-minute timer
+    SetCoilPWM(100); // Turn LED ON
 
-        // 1. Check if new BMP sample ready
-        if (bmp_data_ready) {
-            bmp_data_ready = false;
-            GetPressure();
-                if (available_samples > 0) {
-                    // read the next sample from buffer
-                    //BMPData raw = bmpBuffer[read_index]; // RAW WTF???
-                    const volatile BMPData& raw = bmpBuffer[read_index];
-                    //I think this is meant to be raw_pressure?
+    // Set initial values - red LED on, green LED off.
+    P1OUT |= RED_LED;
+    P6OUT &= ~GREEN_LED;
 
-                    // advance read_index and decrease available_samples
-                    read_index = (read_index + 1) % BMP_BUFFER_SIZE;
-                    available_samples--;
-
-                    // convert to altitude and push to sliding window
-                    // float altitude = PressureToAltitude(bmpBuffer[read_index].pressure);
-                    float altitude = PressureToAltitude(raw.pressure); //This is meant to raw_pressure?
-                    AltWindow_Push(altitude);
-                }
+    while (1)
+    {
+        if (timer_expired)
+        {
+            timer_expired = 0;
+            // 👇 do the thing after 1 minutes
+            SetCoilPWM(0); // Turn LED OFF (Mock P:WM Coil)
         }
 
+        // other background work here. in this case it would be LoRa
+        // state machines, IO, comms, etc.
 
-        // Update Flight State // should pass in small sample of data for flight determination.
-        UpdateFlightState();
-
-        // State-depened behaviour
-        switch (current_flight_state) {
-            case PREFLIGHT:
-                break;
-            case FLIGHT:
-                break;
-            case LANDED:
-                if (!recovery_active){
-                    // Enter recovery
-                    RecoveryMode();
-                    recovery_active = true;
-                }
-                break;
-            case SHUTDOWN:
-                break;
-        }
+        P1OUT ^= RED_LED;
+        P6OUT ^= GREEN_LED;
+        __delay_cycles(100000); // 100ms delay
     }
+
+
+
+
 }
 
