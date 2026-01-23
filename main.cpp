@@ -50,6 +50,9 @@ volatile bool custom_timer_interrupt = false;
 __interrupt void TIMER0_B0_ISR(void) {
     custom_timer_interrupt = true;
 
+    TB0CCTL0 &= ~CCIE;     // Disable interrupt 
+    TA0CTL |= 0x04;       // Manually set TACLR (bit 2) = 1. This clears the timer. 
+
     // undefined variables
     /*
     DINT; // Disable interrupt
@@ -70,9 +73,18 @@ float initial_altitude = 0.0f;
 void InitCoilPWM(){
     // Setup Pins
     P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to 1. (1 = Output) BIT1 Corresponds to PIN1 on the Port.
+    
+    /*
     P5SEL0 &= ~BIT1;                            // Clear BIT1 in P5SEL0. Now P5SEL0 BIT1 = 0
 	P5SEL1 |= BIT1;                             // Set BIT1 in P5SEL1. Now P5SEL1 BIT1 = 1
     // 10b = Secondary module function is selected which correspond to the timer Timer_B2.
+    */
+
+
+    P5SEL0 |= BIT1;     // Set P5SEL0 = 1
+    P5SEL1 &= ~BIT1;    // Set P5SEL1 = 0
+    //Page 104 --> 01b = select timer Timer_B2
+    
     PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO
 
     // Setup Compare Reg
@@ -323,20 +335,17 @@ void EnableBeacon () { // Need to write code for this
 
 }
 
-//Should check code hmm
 void TimerInterrupt(uint16_t delay_cycles) {
     custom_timer_interrupt = false;
 
-    TB0CTL = TBCLR;                 // Clear timer
+    TB0CTL |= TBCLR;                 // Clear timer
 
     TB0CCR0 = delay_cycles;         // Fire interrupt when counter reaches this
 
-    TB0CCTL0 = CCIE;                // Enable CCR0 interrupt
+    TB0CCTL0 |= CCIE;                // Enable CCR0 interrupt
 
-    TB0CTL = TBSSEL__SMCLK           // SMCLK source
-           | MC__UP;                  // Up mode
+    TB0CTL = TBSSEL_2 | MC_1;       // SMCLK source + Up mode 
 }
-
 
 void RecoveryMode() {
     // Turn off sensors
