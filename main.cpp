@@ -44,22 +44,6 @@ __interrupt void ADC_ISR(void) {
     }
 }
 
-// Timer Interrupt: Interrupt that triggers to elapse an amount of time 
-volatile bool custom_timer_interrupt = false;
-#pragma vector = TIMER0_B0_VECTOR
-__interrupt void TIMER0_B0_ISR(void) {
-    custom_timer_interrupt = true;
-
-    TB0CCTL0 &= ~CCIE;     // Disable interrupt 
-    //TA0CTL |= 0x04;       // Manually set TACLR (bit 2) = 1. This clears the timer. 
-
-    // undefined variables
-    /*
-    DINT; // Disable interrupt
-    TACLR = 1; //Clear TAxR, clock divider state, and the counter direction.
-    */
-}
-
 // ==== FlightStates ==== // 
 enum FlightState {PREFLIGHT, FLIGHT, LANDED, SHUTDOWN };
 enum FlightState current_flight_state = PREFLIGHT;
@@ -298,114 +282,8 @@ bool ChamExceedsThreshold() {
     return (chamber > CHAMBER_MAX);   // Threshold currently has placeholder value. 
 }
 
-// ------------ After landing ------------
 
-// Return true/false depending on whether temperature has dip below threshold during monitoring period
-bool MonitorTemperatures(uint16_t monitor_seconds)
-{
-    uint16_t elapsed_seconds = 0;
 
-    // Check once every second, for 40 seconds 
-    while (elapsed_seconds < (monitor_seconds))
-    {
-        // If ALL are below threshold at the same time → safe
-        if (!BatExceedsThreshold() && !ChamExceedsThreshold()) {
-            return true;
-        }
-
-        __delay_cycles(1000000);  // ~1000 ms (= 1 second) at 1 MHz (default frequency for MSP430)
-        elapsed_seconds += 1;
-    }
-
-    // Did not cool down sufficiently within time window
-    return false;
-}
-
-void DelaySeconds(uint16_t seconds) {
-    for (uint16_t i = 0; i < seconds; i++) {
-        __delay_cycles(1000000);  // 1 second at 1 MHz
-    }
-}
-
-void DisconnectBattery() {
-    P5OUT &= ~BIT2;   // Turn port 5.2 / battery OFF 
-}
-
-void EnableBeacon () { // Need to write code for this 
-
-}
-
-void TimerInterrupt(uint16_t delay_cycles) {
-    custom_timer_interrupt = false;
-
-    TB0CTL |= TBCLR;                 // Clear timer
-
-    TB0CCR0 = delay_cycles;         // Fire interrupt when counter reaches this
-
-    TB0CCTL0 |= CCIE;                // Enable CCR0 interrupt
-
-    TB0CTL = TBSSEL_2 | MC_1;       // SMCLK source + Up mode 
-}
-
-void RecoveryMode() {
-    // Turn off sensors
-    DisableBMP();
-    DisableACCL();
-
-    __enable_interrupt();
-
-    DelaySeconds(450); //Delay by 7.5 minutes 
-    EnableBeacon(); // Function has not been written yet 
-
-    while(current_flight_state != SHUTDOWN){
-        TB0CTL = TBCLR;        // Clear the timer by resetting timer counter to 0
-        TimerInterrupt(50000); // Starting the timer interrupt. Value in unit of microsecond. 16bit--> max = 65,535 = 65ms
-
-        uint8_t duty_cycle = 0;
-        SetCoilPWM(duty_cycle);
-
-        while (1){
-            if (CurrExceedsThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()){
-                duty_cycle = 0;
-                SetCoilPWM(duty_cycle);
-
-                bool safe_to_continue = false;
-                // safe is determined to be true when the bat and the cham temp decreases over a period of time when the PWM is off.
-                safe_to_continue = MonitorTemperatures(40); // Monitor values for 40 seconds. -- Number can be changed. 
-                // Warning mechanism. 3 chances to cool down, otherwise, shutdown. 
-                if (!safe_to_continue){
-                    safe_to_continue = MonitorTemperatures(40);
-                    if (!safe_to_continue) {
-                        safe_to_continue = MonitorTemperatures(40);
-                        if (!safe_to_continue) {
-                            current_flight_state = SHUTDOWN;
-                            DisconnectBattery();
-                            // sendShutdownMessage() Could be a LoRa function call?
-                            break; 
-                        }
-                    }
-                }
-            }
-
-            // Still within while(1) loop 
-            // Getting to this point means values no longer exceeds threshold 
-            if (custom_timer_interrupt == true){
-                custom_timer_interrupt == false;
-
-                duty_cycle = 0;
-                SetCoilPWM(duty_cycle);
-
-                TimerInterrupt(50000); // start timer again in background.
-
-                // LoRa in between
-
-                // check timer.
-
-                break;
-            }         
-        }
-    }
-}
 
 
 // ====== Working Background Timer Dump ====== //
@@ -475,6 +353,86 @@ __interrupt void Timer3_B0_ISR(void)
 
 #define RED_LED BIT0
 #define GREEN_LED BIT6
+
+// =======================================
+
+
+void RecoveryMode2(void) {
+    uint8_t duty_cycle = 0;
+    bool pwm_enabled = false;
+    bool initial_delay_done = false;
+
+    DisableBMP();
+    DisableACCL();
+
+    Timer3_init_1s_tick();
+    __enable_interrupt();
+    
+    start_delay_seconds(450); // Initial 7.5 minute delay
+
+    while (1)
+    {
+        // Stage 1: During first 7.5 minutes: Communicating with LoRa to receive GPS information. After 7.5min, move onto stage 2. 
+        if (!initial_delay_done)
+        {
+            // LoRa + GPS work here
+            if (timer_expired)
+            {
+                timer_expired = 0;
+                initial_delay_done = true;
+
+                // Start first PWM ON window
+                pwm_enabled = true;
+                duty_cycle = 100;
+                SetCoilPWM(duty_cycle);
+
+                start_delay_seconds(10);
+            }
+        }
+
+        // Stage 2: Timer for 10 seconds has started. The PWM Coil is on. Continuous monitoring of current and temp 
+    . 
+        if (pwm_enabled) {
+
+            // This loop is blocking so there's no other background task that happens within the 10 seconds. 
+            while (!timer_expired) {
+                // Safety checks
+                if (CurrExceedsThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()) {
+                    duty_cycle = 0;
+                    SetCoilPWM(duty_cycle); }
+            }
+
+            timer_expired = 0;
+
+            // Finish stage 2. After 10 seconds has passed, turn off PWM. 
+            pwm_enabled = false;
+            SetCoilPWM(0);
+
+            // Start cooldown
+            start_delay_seconds(300);
+        }
+
+        // Stage 3: 
+        if (initial_delay_done && !pwm_enabled)
+        {
+            SetCoilPWM(0);
+
+            // Other background tasks here
+
+            if (timer_expired)
+            {
+                timer_expired = 0;
+
+                // Restart PWM ON window
+                pwm_enabled = true;
+                duty_cycle = 100;
+                SetCoilPWM(duty_cycle);
+
+                start_delay_seconds(10);
+            }
+        }
+    }
+}
 
 /*
 Main code; should be kept as clean as possible.
@@ -591,7 +549,6 @@ int main(void) {
 
     __enable_interrupt();
 
-
     // Being 1-minute timer
     start_delay_seconds(60);   // start 1-minute timer
     SetCoilPWM(100); // Turn LED ON
@@ -616,9 +573,5 @@ int main(void) {
         P6OUT ^= GREEN_LED;
         __delay_cycles(100000); // 100ms delay
     }
-
-
-
-
 }
 
