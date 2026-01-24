@@ -671,26 +671,19 @@ int main(void) {
     P1DIR |= BIT0;             // RED LED as output
     P1OUT &= ~BIT0;            // Turn RED LED off
 
-    // 1. Configure P5.0 for Analog Input
-    P5SEL0 |= BIT0;
-    P5SEL1 |= BIT0;
+    // Configure P5.0
+    // P5SEL0 |= BIT0;
+    // P5SEL1 |= BIT0;
+    initADCGPIO();
 
-    // 2. Configure ADC
-    // ADCCTL0: Enabled, S/H Pulse, Start Conversion (later)
-    ADCCTL0 = ADCSHT_2 | ADCON;
-    // ADCCTL1: ADCSSEL_2 (SMCLK), Pulse Mode
-    ADCCTL1 = ADCSSEL_2 | ADCSHP; // | ADCCONSEQ_2; // Check last OR  as its for repeated signle-channel smapling
-    // ADCCTL2: 12-bit resolution
-    ADCCTL2 = ADCRES_2;
-    // Enable interrupts
-    ADCIE = ADCIE0;
-    // ADCMCTL0: Select Channel A8 (P5.0), Vref = AVCC/AVSS
-    ADCMCTL0 = ADCINCH_8;
+    // Configure ADC
+    ADCCTL0 = ADCSHT_4 | ADCON;                         // Sample and Hold time for 64 clk cycles | enable ADC (Start conversion later)
+    ADCCTL1 = ADCSSEL_2 | ADCSHP;                       // Select SMCLK | signal sourced from sampling timer.
+    ADCCTL2 = ADCRES_2;                                 // Set 12-Bit ADC Resolution
+    ADCIE = ADCIE0;                                     // Enable interrupts
+    ADCMCTL0 = ADCSREF_1 | ADCINCH_8;                   // Vref = AVCC/AVSS | Select Channel A8 (P5.0) ATM HARDCODED
+    ADCCTL0 |= ADCENC + ADCSC;                          // ADC Enable conversion
 
-    // 3. Configure Reference
-    ADCCTL0 |= ADCENC;         // Enable conversion
-
-    //
     PM5CTL0 &= ~LOCKLPM5;   // Unlock GPIO pins
 
 
