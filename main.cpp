@@ -31,17 +31,47 @@ __interrupt void PORT2_ISR(void) {
 
 // ADC Interrupt: interrupt that read ADC memory
 volatile uint16_t adc_result;
-    #pragma vector=ADC_VECTOR
+
+#pragma vector=ADC_VECTOR
 __interrupt void ADC_ISR(void) {
-    switch (__even_in_range(ADCIV, 0x0C)) //Interrupt Source: ADC memory Interrupt flag; Interrupt Flag: ADCIFG0
+
+    // __bic_SR_register_on_exit(CPUOFF);          // Clear CPUOFF bit from 0(SR)
+    // adc_result = ADCMEM0;        // Must read ADC result to clear flag
+	// ADCIFG &= ~ADCIFG0;                         // Clear interrupt flag
+    // P1OUT |= BIT0;             // Turn RED LED ON
+    
+    // //switch (__even_in_range(ADCIV, 0x0C)) //Interrupt Source: ADC memory Interrupt flag; Interrupt Flag: ADCIFG0
+    // switch (__even_in_range(ADCIV, 0x0E))
+    // {
+    //     case 0x06: //ADCMEMO interrupt was 0x0C before
+    //         adc_result = ADCMEM0;   // Read ADC result
+    //         //P1OUT |= BIT0;             // Turn RED LED ON 
+    //         LPM0_EXIT;             // Wakes up CPU
+    //         break;
+    //     default:
+    //         break;
+    // }
+
+    /*
+    __bic_SR_register_on_exit(CPUOFF); // Wake CPU
+    P1OUT ^= BIT0;  
+    adc_result = ADCMEM0;          // MUST read this
+    //ADCIFG &= ~ADCIFG0;              // Clear INT flag
+    */
+
+    switch (__even_in_range(ADCIV, ADCIV_ADCIFG))
     {
-        case 0x0C:
-            adc_result = ADCMEM0;   // Read ADC result
-            LPM0_EXIT;             // Wakes up CPU
+        case ADCIV__ADCIFG0:
+            adc_result = ADCMEM0;   // Read clears ADCIFG0
+            P1OUT ^= BIT0;
+            __bic_SR_register_on_exit(CPUOFF);
             break;
+
         default:
             break;
     }
+
+    
 }
 
 // ==== FlightStates ==== // 
@@ -174,10 +204,10 @@ void InitADC () {
     gpio_init();
     */
 
-    PMMCTL2 = REFVSEL_2 | INTREFEN_1;           // Set reference voltage to be 2.5V, then enable the internal reference. 
+    PMMCTL2 |= REFVSEL_2 + INTREFEN_1;           // Set reference voltage to be 2.5V, then enable the internal reference. 
     while (!(PMMCTL2 & REFGENRDY));             // Wait until V_ref is ready to be used. Previously: __delay_cycles(1000);
   
-    ADCCTL1 = ADCDIV_2 | ADCSHP_0;              // Divide input clock by 3 and select source to be sample-input
+    ADCCTL1 |= ADCDIV_2 + ADCSHP_0;              // Divide input clock by 3 and select source to be sample-input
 
     ADCCTL2 &= ~ADCRES;                         // Clear bits/resolution value 
    
@@ -185,7 +215,7 @@ void InitADC () {
 
     ADCIE |= ADCIE0;                            // Enable interrupts 
 
-    ADCCTL0 = ADCSHT_4 | ADCON;                 // sample and hold for 64 clock cycles, enable ADC.
+    ADCCTL0 |= ADCSHT_4 + ADCON;                 // sample and hold for 64 clock cycles, enable ADC.
 
     __delay_cycles(100);						// Wait for reference to settle
 
@@ -196,9 +226,10 @@ void StartADC(uint8_t channel) {
     //ADCCTL0 &= ADCENC_0;                // Stop ADC (Using "_0 / _1" can be problematic as they're meant to be assignemts)
     ADCCTL0 &= ~ADCENC;                  // Clear the bit that enables ADC conversion. AKA stop ADC
 
-    ADCMCTL0 = ADCSREF_1 | channel;     // Select input channel + reference  1: 001b = {VR+ = VREF and VR– = AVSS}
+    ADCMCTL0 |= ADCSREF_1 + channel;     // Select input channel + reference  1: 001b = {VR+ = VREF and VR– = AVSS}
 
-    ADCCTL0 |= ADCENC | ADCSC;          // Enable + start conversion
+    ADCCTL0 |= ADCENC;          // Enable + start conversion
+    ADCCTL0 |= ADCSC;           // Enable + start conversion
 }
 
 int16_t TempConversion(int16_t adcValue ) {
@@ -391,7 +422,6 @@ void RecoveryMode2(void) {
         }
 
         // Stage 2: Timer for 10 seconds has started. The PWM Coil is on. Continuous monitoring of current and temp 
-    . 
         if (pwm_enabled) {
 
             // This loop is blocking so there's no other background task that happens within the 10 seconds. 
@@ -434,11 +464,26 @@ void RecoveryMode2(void) {
     }
 }
 
+// initADCGPIO intialises all 3 GPIO pins as analog inputs for the ADC
+void initADCGPIO(){
+    // P5.0 (Chamber Thermister Temperature)
+    P5SEL0 |= BIT0;
+    P5SEL1 |= BIT0;
+
+    // P5.2 (Battery Thermister Temperature)
+    P5SEL0 |= BIT2;
+    P5SEL1 |= BIT2;
+
+    // P5.3 (Current Sense Value)
+    P5SEL0 |= BIT3;
+    P5SEL1 |= BIT3;
+
+}
+
+
 /*
 Main code; should be kept as clean as possible.
 */
-
-
 
 int main(void) {
     // bool recovery_active = false;
@@ -515,22 +560,25 @@ int main(void) {
     /*
     WDTCTL = WDTPW + WDTHOLD; // Stop WDT
     InitCoilPWM();
-    
+
     while (1)
 	{
 		for (uint16_t i = 0; i < 100; i++)
 		{
             SetCoilPWM(i);
-            __delay_cycles(10 * PWM_PERIOD);
+            __delay_cycles(50 * PWM_PERIOD);
 		}
 		for (uint16_t i = 100; i > 0; i--)
 		{
 			SetCoilPWM(i);
-            __delay_cycles(10 * PWM_PERIOD);
+            __delay_cycles(50 * PWM_PERIOD);
 		}
 	}
     */
 
+
+
+    /*
     WDTCTL = WDTPW | WDTHOLD;
 
     // Init timer
@@ -562,7 +610,7 @@ int main(void) {
         if (timer_expired)
         {
             timer_expired = 0;
-            // 👇 do the thing after 1 minutes
+            // do the thing after 1 minutes
             SetCoilPWM(0); // Turn LED OFF (Mock P:WM Coil)
         }
 
@@ -572,6 +620,98 @@ int main(void) {
         P1OUT ^= RED_LED;
         P6OUT ^= GREEN_LED;
         __delay_cycles(100000); // 100ms delay
+    }
+    */
+
+
+    /*
+    // Thermister test
+    WDTCTL = WDTPW | WDTHOLD;  // Stop watchdog
+    // PM5CTL0 &= ~LOCKLPM5;      // Unlock GPIO
+
+    // Init LED
+    P1DIR |= BIT0;             // RED LED as output
+    P1OUT &= ~BIT0;            // Turn RED LED off
+
+    //P1OUT |= BIT0;             // Turn RED LED ON 
+
+    InitADC();                 // Init ADC
+
+    // P1OUT |= BIT0;             // Turn RED LED ON 
+
+    __enable_interrupt();
+
+    while(1) {
+        // Start ADC for chamber thermistor
+        StartADC(ADC_CHAM_THERM);
+        // P1OUT |= BIT0;
+        // __delay_cycles(10000000); // ~1 second delay (depends on clock)
+        
+        //LPM0;  // Wait for conversion complete
+        // __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
+
+        __no_operation();
+        int16_t tempC = TempConversion(adc_result);
+        __no_operation();
+        //P1OUT |= BIT0; NO
+
+        // Simple LED indicator
+        if(tempC >= -100) {
+            P1OUT |= BIT0;   // Turn RED LED ON if temp >= threshold (NO)
+        } else {
+            P1OUT &= ~BIT0;  // Turn RED LED OFF
+        }
+
+        // __delay_cycles(1000000); // ~1 second delay (depends on clock)
+    }
+    */
+
+    WDTCTL = WDTPW | WDTHOLD;   // Stop watchdog timer
+
+    P1DIR |= BIT0;             // RED LED as output
+    P1OUT &= ~BIT0;            // Turn RED LED off
+
+    // 1. Configure P5.0 for Analog Input
+    P5SEL0 |= BIT0;
+    P5SEL1 |= BIT0;
+
+    // 2. Configure ADC
+    // ADCCTL0: Enabled, S/H Pulse, Start Conversion (later)
+    ADCCTL0 = ADCSHT_2 | ADCON;
+    // ADCCTL1: ADCSSEL_2 (SMCLK), Pulse Mode
+    ADCCTL1 = ADCSSEL_2 | ADCSHP; // | ADCCONSEQ_2; // Check last OR  as its for repeated signle-channel smapling
+    // ADCCTL2: 12-bit resolution
+    ADCCTL2 = ADCRES_2;
+    // Enable interrupts
+    ADCIE = ADCIE0;
+    // ADCMCTL0: Select Channel A8 (P5.0), Vref = AVCC/AVSS
+    ADCMCTL0 = ADCINCH_8;
+
+    // 3. Configure Reference
+    ADCCTL0 |= ADCENC;         // Enable conversion
+
+    //
+    PM5CTL0 &= ~LOCKLPM5;   // Unlock GPIO pins
+
+
+    while(1)
+    {
+        // 4. Start Conversion
+
+        // Must reset the ADC between reads
+        ADCCTL0 &= ~ADCENC;    // Disable ADC
+        ADCCTL0 |= ADCENC;     // Re-enable ADC
+        ADCCTL0 |= ADCSC;      // Start the conversion
+        __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
+        
+        // 5. Wait for conversion to complete
+        // while(ADCCTL0 & ADCBUSY);
+
+        // // 6. Read Value (12-bit, 0-4095)
+        // unsigned int adcResult = ADCMEM0;
+
+        // // --- Use adcResult here ---
+        // __delay_cycles(1000); // Small delay
     }
 }
 
