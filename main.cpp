@@ -722,4 +722,12 @@ int main(void) {
     initGPSUART();
 
 	__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
+
+    //Notes: could use a polling approach instead of int if GPS enable pin isn't wired.
+
+    /*
+    Re-write ADC INIT with working code and retest?
+    make sure to unlock GPIO ONCE at the end of all the inits in main(); 
+    maybe we can start compounding different components together? esp for landing
+    */
 }
