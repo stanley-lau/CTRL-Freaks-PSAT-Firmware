@@ -223,6 +223,8 @@ void InitADC () {
 }
 
 void StartADC(uint8_t channel) {
+
+    /*
     //ADCCTL0 &= ADCENC_0;                // Stop ADC (Using "_0 / _1" can be problematic as they're meant to be assignemts)
     ADCCTL0 &= ~ADCENC;                  // Clear the bit that enables ADC conversion. AKA stop ADC
 
@@ -230,6 +232,13 @@ void StartADC(uint8_t channel) {
 
     ADCCTL0 |= ADCENC;          // Enable + start conversion
     ADCCTL0 |= ADCSC;           // Enable + start conversion
+    */
+
+    ADCCTL0 &= ~ADCENC;                  // Must disable ADC
+    ADCMCTL0 = channel | ADCSREF_1;      // Set channel + AVCC ref
+    ADCCTL0 |= ADCENC | ADCSC;           // Start conversion
+    __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
+    
 }
 
 int16_t TempConversion(int16_t adcValue ) {
@@ -250,25 +259,26 @@ int16_t TempConversion(int16_t adcValue ) {
 }
 
 // Return the temperature of the chamber 
-int16_t ChamberTemp () {
+int16_t GetChamberTemp () {
     uint16_t chamThermADC;
+    uint16_t cham_ADC_temperature;
 
     // Chamber thermistor
     StartADC(ADC_CHAM_THERM);
-    LPM0;                                 //Code only continues when interrupt handler has collected all data
+    
     chamThermADC = adc_result; 
 
     // Convert temperatures
-    return TempConversion(chamThermADC);
+    cham_ADC_temperature = TempConversion(chamThermADC);
+    return cham_ADC_temperature;
 }   
 
 // Return the temperature of the battery 
-int16_t BatteryTemp () {
+int16_t GetBatteryTemp () {
     uint16_t batThermADC;
 
     // Battery thermistor
     StartADC(ADC_BAT_THERM);
-    LPM0;
     batThermADC = adc_result;
 
     return TempConversion(batThermADC);
@@ -280,7 +290,7 @@ double CurrentSense () {
 
     // Current sense
     StartADC(ADC_CUR_SENSE);
-    LPM0;
+    __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
     curSenseADC = adc_result;       
     double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current 
     return current;
@@ -304,12 +314,12 @@ bool CurrExceedsThreshold() {
 }
 
 bool BatExceedsThreshold() {
-    double battery = BatteryTemp();   
+    double battery = GetBatteryTemp();   
     return (battery > BATTERY_MAX);   // Threshold currently has placeholder value. 
 }
 
 bool ChamExceedsThreshold() {
-    double chamber = ChamberTemp();   
+    double chamber = GetChamberTemp();   
     return (chamber > CHAMBER_MAX);   // Threshold currently has placeholder value. 
 }
 
@@ -668,6 +678,9 @@ int main(void) {
 
     WDTCTL = WDTPW | WDTHOLD;   // Stop watchdog timer
 
+    PMMCTL2 |= REFVSEL_2 + INTREFEN_1;           // Set reference voltage to be 2.5V, then enable the internal reference. 
+    while (!(PMMCTL2 & REFGENRDY));             // Wait until V_ref is ready to be used. Previously: __delay_cycles(1000);
+
     P1DIR |= BIT0;             // RED LED as output
     P1OUT &= ~BIT0;            // Turn RED LED off
 
@@ -681,30 +694,34 @@ int main(void) {
     ADCCTL1 = ADCSSEL_2 | ADCSHP;                       // Select SMCLK | signal sourced from sampling timer.
     ADCCTL2 = ADCRES_2;                                 // Set 12-Bit ADC Resolution
     ADCIE = ADCIE0;                                     // Enable interrupts
+
+    /* TEMP disable to test STARTADC()
     ADCMCTL0 = ADCSREF_1 | ADCINCH_8;                   // Vref = AVCC/AVSS | Select Channel A8 (P5.0) ATM HARDCODED
     ADCCTL0 |= ADCENC + ADCSC;                          // ADC Enable conversion
+    */
 
     PM5CTL0 &= ~LOCKLPM5;   // Unlock GPIO pins
 
+    uint16_t chamber_temperature;
+    uint16_t battery_temperature;
 
     while(1)
     {
         // 4. Start Conversion
+        chamber_temperature = GetChamberTemp();
+        battery_temperature = GetBatteryTemp();
 
+
+
+
+        /* TEMP disable to test STARTADC();
         // Must reset the ADC between reads
         ADCCTL0 &= ~ADCENC;    // Disable ADC
         ADCCTL0 |= ADCENC;     // Re-enable ADC
         ADCCTL0 |= ADCSC;      // Start the conversion
         __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
+        */
         
-        // 5. Wait for conversion to complete
-        // while(ADCCTL0 & ADCBUSY);
-
-        // // 6. Read Value (12-bit, 0-4095)
-        // unsigned int adcResult = ADCMEM0;
-
-        // // --- Use adcResult here ---
-        // __delay_cycles(1000); // Small delay
     }
 }
 
