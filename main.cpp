@@ -14,7 +14,32 @@
 
 // ==== Define Constants ==== //
 // PWM
-#define PWM_PERIOD 500
+#define PWM_PERIOD 500                  // PWM Period
+
+// LED
+#define RED_LED BIT0                    // Onboard LED
+#define GREEN_LED BIT6                  // Onboard LED
+
+// ADC
+#define ADCMAX 4095.00 //Correlating to 12 bits
+#define VREF  2.5
+#define RESISTOR 10000
+#define BETA 3380 
+#define RTHERM 10000
+#define T0_K 298.15 //25 degrees Celsius in Kelvin 
+
+// All these thresholds are placeholder values!!! Must be checked and updated!!! 
+#define CURRENT_MAX 2.0   // Max current in Amps
+#define BATTERY_MAX 2.0
+#define CHAMBER_MAX 2.0
+
+#define R_SENSE 0.1       // Shunt resistor in Ohms
+
+// ADC pins
+#define ADC_CHAM_THERM   ADCINCH_8    // P5.0 / A8
+#define ADC_BAT_THERM    ADCINCH_10   // P5.2 / A10
+#define ADC_CUR_SENSE    ADCINCH_11   // P5.3 / A11
+
 
 // ==== Interrupts ==== //
 
@@ -153,26 +178,7 @@ void UpdateFlightState() {
 
 /* -------------------------------ADC------------------------------- */
 
-
-
-#define ADCMAX 4095.00 //Correlating to 12 bits
-#define VREF  2.5
-#define RESISTOR 10000
-#define BETA 3380 
-#define RTHERM 10000
-#define T0_K 298.15 //25 degrees Celsius in Kelvin 
-
-// All these thresholds are placeholder values!!! Must be checked and updated!!! 
-#define CURRENT_MAX 2.0   // Max current in Amps
-#define BATTERY_MAX 2.0
-#define CHAMBER_MAX 2.0
-
-#define R_SENSE 0.1       // Shunt resistor in Ohms
-
-#define ADC_CHAM_THERM   ADCINCH_8    // P5.0 / A8
-#define ADC_BAT_THERM    ADCINCH_10   // P5.2 / A10
-#define ADC_CUR_SENSE    ADCINCH_11   // P5.3 / A11
-
+// Not currently used.
 void InitADC () {
     /*
     may need to write code for this init. 
@@ -291,8 +297,6 @@ bool ChamExceedsThreshold() {
 
 
 
-
-
 // ====== Working Background Timer Dump ====== //
 
 // Global variables
@@ -356,10 +360,9 @@ __interrupt void Timer3_B0_ISR(void)
 
 */
 
-// ====== Working Background Timer Dump ====== //
+// ====== Working Background Timer Dump (above)====== //
 
-#define RED_LED BIT0
-#define GREEN_LED BIT6
+
 
 // =======================================
 
