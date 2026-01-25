@@ -201,7 +201,7 @@ void InitADC () {
 
     __delay_cycles(100);						// Wait for reference to settle
 
-    PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO / LPMx.5 Lock Bit 
+    PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO / LPMx.5 Lock Bit  // This should be in main and be unlocked after all inits
 }
 
 void StartADC(uint8_t channel) {
@@ -484,18 +484,18 @@ volatile uint8_t gps_line_ready = 0;
 #pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
 __interrupt void USCIA1RX_ISR(void){
     
-    P1OUT ^= BIT0;
-
+    P1OUT ^= BIT0;              // Toggle LED for debuggign
     char received = UCA0RXBUF;
-    if (received == '\n') {  // End of NMEA sentence
-        gps_buffer[gps_index] = '\0'; // Null-terminate string
+    else if (received == '\n') {
+        gps_buffer[gps_index] = '\0';
         gps_index = 0;
         gps_line_ready = 1;
-    } else {
+    }
+    else {
         if (gps_index < GPS_BUFFER_SIZE - 1) {
             gps_buffer[gps_index++] = received;
         } else {
-            gps_index = 0; // Prevent overflow
+            gps_index = 0;
         }
     }
 }
@@ -518,13 +518,21 @@ void initADCGPIO(){
 
 }
 
-void initClock16MHz(void)
-{
+void initClock16MHz(void){
     CSCTL0_H = 0xA5;          // Unlock CS registers
     CSCTL1 = 0x0040;          // DCO = 16 MHz
     CSCTL2 = 0x0033; // SMCLK = MCLK = DCO
     CSCTL3 = 0x0000;  // No division
     CSCTL0_H = 0x00;                // Lock CS registers
+}
+
+void ClearGPSBuffer(void){
+    uint8_t i;
+    for (i = 0; i < GPS_BUFFER_SIZE; i++) {
+        gps_buffer[i] = 0;
+    }
+    gps_index = 0;
+    gps_line_ready = 0;
 }
 
 
@@ -710,25 +718,8 @@ int main(void) {
 
     P1DIR |= BIT0;             // RED LED as output
     P1OUT &= ~BIT0;            // Turn RED LED off
+    ClearGPSBuffer();
     initGPSUART();
 
 	__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
-
-    
-    // __bis_SR_register(GIE); // Enable global interrupts
-
-    // while (1) {
-    //         // Wait for TX buffer to be ready
-    //     while (!(UCA0IFG & UCTXIFG));
-    //     UCA0TXBUF = 0x11;
-
-    //     __delay_cycles(160000);
-
-    //     if (gps_line_ready) {
-    //         gps_line_ready = 0;
-    //         P1OUT ^= BIT0; // Toggle LED in ISR
-    //         }
-    // }
-
 }
-
