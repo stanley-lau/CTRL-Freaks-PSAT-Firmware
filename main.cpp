@@ -35,30 +35,6 @@ volatile uint16_t adc_result;
 #pragma vector=ADC_VECTOR
 __interrupt void ADC_ISR(void) {
 
-    // __bic_SR_register_on_exit(CPUOFF);          // Clear CPUOFF bit from 0(SR)
-    // adc_result = ADCMEM0;        // Must read ADC result to clear flag
-	// ADCIFG &= ~ADCIFG0;                         // Clear interrupt flag
-    // P1OUT |= BIT0;             // Turn RED LED ON
-    
-    // //switch (__even_in_range(ADCIV, 0x0C)) //Interrupt Source: ADC memory Interrupt flag; Interrupt Flag: ADCIFG0
-    // switch (__even_in_range(ADCIV, 0x0E))
-    // {
-    //     case 0x06: //ADCMEMO interrupt was 0x0C before
-    //         adc_result = ADCMEM0;   // Read ADC result
-    //         //P1OUT |= BIT0;             // Turn RED LED ON 
-    //         LPM0_EXIT;             // Wakes up CPU
-    //         break;
-    //     default:
-    //         break;
-    // }
-
-    /*
-    __bic_SR_register_on_exit(CPUOFF); // Wake CPU
-    P1OUT ^= BIT0;  
-    adc_result = ADCMEM0;          // MUST read this
-    //ADCIFG &= ~ADCIFG0;              // Clear INT flag
-    */
-
     switch (__even_in_range(ADCIV, ADCIV_ADCIFG))
     {
         case ADCIV__ADCIFG0:
@@ -223,16 +199,6 @@ void InitADC () {
 }
 
 void StartADC(uint8_t channel) {
-
-    /*
-    //ADCCTL0 &= ADCENC_0;                // Stop ADC (Using "_0 / _1" can be problematic as they're meant to be assignemts)
-    ADCCTL0 &= ~ADCENC;                  // Clear the bit that enables ADC conversion. AKA stop ADC
-
-    ADCMCTL0 |= ADCSREF_1 + channel;     // Select input channel + reference  1: 001b = {VR+ = VREF and VR– = AVSS}
-
-    ADCCTL0 |= ADCENC;          // Enable + start conversion
-    ADCCTL0 |= ADCSC;           // Enable + start conversion
-    */
 
     ADCCTL0 &= ~ADCENC;                  // Must disable ADC
     ADCMCTL0 = channel | ADCSREF_1;      // Set channel + AVCC ref
@@ -633,48 +599,6 @@ int main(void) {
     }
     */
 
-
-    /*
-    // Thermister test
-    WDTCTL = WDTPW | WDTHOLD;  // Stop watchdog
-    // PM5CTL0 &= ~LOCKLPM5;      // Unlock GPIO
-
-    // Init LED
-    P1DIR |= BIT0;             // RED LED as output
-    P1OUT &= ~BIT0;            // Turn RED LED off
-
-    //P1OUT |= BIT0;             // Turn RED LED ON 
-
-    InitADC();                 // Init ADC
-
-    // P1OUT |= BIT0;             // Turn RED LED ON 
-
-    __enable_interrupt();
-
-    while(1) {
-        // Start ADC for chamber thermistor
-        StartADC(ADC_CHAM_THERM);
-        // P1OUT |= BIT0;
-        // __delay_cycles(10000000); // ~1 second delay (depends on clock)
-        
-        //LPM0;  // Wait for conversion complete
-        // __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
-
-        __no_operation();
-        int16_t tempC = TempConversion(adc_result);
-        __no_operation();
-        //P1OUT |= BIT0; NO
-
-        // Simple LED indicator
-        if(tempC >= -100) {
-            P1OUT |= BIT0;   // Turn RED LED ON if temp >= threshold (NO)
-        } else {
-            P1OUT &= ~BIT0;  // Turn RED LED OFF
-        }
-
-        // __delay_cycles(1000000); // ~1 second delay (depends on clock)
-    }
-    */
 
     WDTCTL = WDTPW | WDTHOLD;   // Stop watchdog timer
 
