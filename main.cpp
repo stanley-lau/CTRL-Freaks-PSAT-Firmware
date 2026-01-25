@@ -443,6 +443,65 @@ void RecoveryMode2(void) {
     }
 }
 
+// Initialise UART pins for GPS
+void initGPSUART(){
+    // Configure pins for UART
+    P1SEL0 |= BIT6 | BIT7;   // RX + TX
+    P1SEL1 &= ~(BIT6 | BIT7);
+    // TX not used
+
+    // Configure UART
+    // Put eUSCI in reset
+    UCA0CTLW0 = UCSWRST;              
+
+    // Select SMCLK as clock source
+    UCA0CTLW0 |= UCSSEL__SMCLK;
+
+    // // Baud rate: 16MHz / 9600
+    // UCA0BRW = 104;                      
+    // UCA0MCTLW = UCOS16 | UCBRF_2 | 0x4900;
+
+    // Baud rate 115200, SMCLK = 16MHz, oversampling
+    UCA0BRW = 8;                   // Integer part
+    UCA0MCTLW = UCOS16 | (11 << 4) | 0xD600; // UCBRFx = 11, UCBRSx = 0xD6
+    
+    // Release eUSCI from reset
+    UCA0CTLW0 &= ~UCSWRST;
+
+    PM5CTL0 &= ~LOCKLPM5; // Unlock GPIO
+
+    // Enable RX interrupt before releasing reset
+    UCA0IE |= UCRXIE;
+}
+
+
+#define GPS_BUFFER_SIZE 128
+volatile char gps_buffer[GPS_BUFFER_SIZE];
+volatile uint8_t gps_index = 0;
+volatile uint8_t gps_line_ready = 0;
+
+// UART ISR
+#pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
+__interrupt void USCIA1RX_ISR(void){
+    
+    P1OUT ^= BIT0;
+
+    char received = UCA0RXBUF;
+    if (received == '\n') {  // End of NMEA sentence
+        gps_buffer[gps_index] = '\0'; // Null-terminate string
+        gps_index = 0;
+        gps_line_ready = 1;
+    } else {
+        if (gps_index < GPS_BUFFER_SIZE - 1) {
+            gps_buffer[gps_index++] = received;
+        } else {
+            gps_index = 0; // Prevent overflow
+        }
+    }
+}
+
+
+
 // initADCGPIO intialises all 3 GPIO pins as analog inputs for the ADC
 void initADCGPIO(){
     // P5.0 (Chamber Thermister Temperature)
@@ -457,6 +516,15 @@ void initADCGPIO(){
     P5SEL0 |= BIT3;
     P5SEL1 |= BIT3;
 
+}
+
+void initClock16MHz(void)
+{
+    CSCTL0_H = 0xA5;          // Unlock CS registers
+    CSCTL1 = 0x0040;          // DCO = 16 MHz
+    CSCTL2 = 0x0033; // SMCLK = MCLK = DCO
+    CSCTL3 = 0x0000;  // No division
+    CSCTL0_H = 0x00;                // Lock CS registers
 }
 
 
@@ -536,7 +604,7 @@ int main(void) {
     // }
 
 
-    /*
+    /* Successful pulsing of PWM using LED
     WDTCTL = WDTPW + WDTHOLD; // Stop WDT
     InitCoilPWM();
 
@@ -557,7 +625,7 @@ int main(void) {
 
 
 
-    /*
+    /* Sucessfull testing with toggling LEDs with background timer.
     WDTCTL = WDTPW | WDTHOLD;
 
     // Init timer
@@ -603,6 +671,7 @@ int main(void) {
     */
 
 
+    /* ADC Testing: incorrect temeperation conversion. ISR trigger. use debug mode.
     WDTCTL = WDTPW | WDTHOLD;   // Stop watchdog timer
 
     PMMCTL2 |= REFVSEL_2 + INTREFEN_1;           // Set reference voltage to be 2.5V, then enable the internal reference. 
@@ -622,11 +691,6 @@ int main(void) {
     ADCCTL2 = ADCRES_2;                                 // Set 12-Bit ADC Resolution
     ADCIE = ADCIE0;                                     // Enable interrupts
 
-    /* TEMP disable to test STARTADC()
-    ADCMCTL0 = ADCSREF_1 | ADCINCH_8;                   // Vref = AVCC/AVSS | Select Channel A8 (P5.0) ATM HARDCODED
-    ADCCTL0 |= ADCENC + ADCSC;                          // ADC Enable conversion
-    */
-
     PM5CTL0 &= ~LOCKLPM5;   // Unlock GPIO pins
 
     uint16_t chamber_temperature;
@@ -637,18 +701,34 @@ int main(void) {
         // 4. Start Conversion
         chamber_temperature = GetChamberTemp();
         battery_temperature = GetBatteryTemp();
-
-
-
-
-        /* TEMP disable to test STARTADC();
-        // Must reset the ADC between reads
-        ADCCTL0 &= ~ADCENC;    // Disable ADC
-        ADCCTL0 |= ADCENC;     // Re-enable ADC
-        ADCCTL0 |= ADCSC;      // Start the conversion
-        __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
-        */
         
     }
+    */
+
+    WDTCTL = WDTPW | WDTHOLD;
+    initClock16MHz();
+
+    P1DIR |= BIT0;             // RED LED as output
+    P1OUT &= ~BIT0;            // Turn RED LED off
+    initGPSUART();
+
+	__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
+
+    
+    // __bis_SR_register(GIE); // Enable global interrupts
+
+    // while (1) {
+    //         // Wait for TX buffer to be ready
+    //     while (!(UCA0IFG & UCTXIFG));
+    //     UCA0TXBUF = 0x11;
+
+    //     __delay_cycles(160000);
+
+    //     if (gps_line_ready) {
+    //         gps_line_ready = 0;
+    //         P1OUT ^= BIT0; // Toggle LED in ISR
+    //         }
+    // }
+
 }
 
