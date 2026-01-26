@@ -403,6 +403,8 @@ void RecoveryMode2(void) {
     DisableBMP();
     DisableACCL();
 
+    InitCoilPWM(); 
+
     Timer3_init_1s_tick();
     __enable_interrupt();
     
@@ -419,19 +421,19 @@ void RecoveryMode2(void) {
                 timer_expired = 0;
                 initial_delay_done = true;
 
-                // Start first PWM ON window
+                // Start PWM ON window for 15 seconds. Smoke release. 
                 pwm_enabled = true;
                 duty_cycle = 100;
                 SetCoilPWM(duty_cycle);
 
-                start_delay_seconds(10);
+                start_delay_seconds(15);
             }
         }
 
-        // Stage 2: Timer for 10 seconds has started. The PWM Coil is on. Continuous monitoring of current and temp 
+        // Stage 2: Timer for 15 seconds has started. The PWM Coil is on. Continuous monitoring of current and temperature.
         if (pwm_enabled) {
 
-            // This loop is blocking so there's no other background task that happens within the 10 seconds. 
+            // This loop is blocking so there's no other background task that happens within the 15 seconds. 
             while (!timer_expired) {
                 // Safety checks
                 if (CurrExceedsThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()) {
@@ -441,17 +443,18 @@ void RecoveryMode2(void) {
 
             timer_expired = 0;
 
-            // Finish stage 2. After 10 seconds has passed, turn off PWM. 
+            // Finish stage 2. After 15 seconds has passed, turn off PWM. 
             pwm_enabled = false;
             SetCoilPWM(0);
 
             // Start cooldown
-            start_delay_seconds(300);
+            start_delay_seconds(45);
         }
 
         // Stage 3: 
         if (initial_delay_done && !pwm_enabled)
         {
+            // 45 second cooldown. Allow wick to resaturate. 
             SetCoilPWM(0);
 
             // Other background tasks here
@@ -630,7 +633,7 @@ int main(void) {
     //         case LANDED:
     //             if (!recovery_active){
     //                 // Enter recovery
-    //                 RecoveryMode();
+    //                 RecoveryMode2();
     //                 recovery_active = true;
     //             }
     //             break;
@@ -761,8 +764,11 @@ int main(void) {
     maybe we can start compounding different components together? esp for landing
     */
 
+    /*
     // Demonstrate change in flight state. Passing in mock delta altitude value, and acceleration magnitude. 
     current_flight_state = PREFLIGHT;
     UpdateFlightStateDemo(10, 10); 
     UpdateFlightStateDemo(2, 2); 
+    */
+
 }
