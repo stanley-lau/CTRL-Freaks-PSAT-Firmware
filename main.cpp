@@ -486,7 +486,7 @@ __interrupt void USCIA1RX_ISR(void){
     
     P1OUT ^= BIT0;              // Toggle LED for debuggign
     char received = UCA0RXBUF;
-    else if (received == '\n') {
+    if (received == '\n') {
         gps_buffer[gps_index] = '\0';
         gps_index = 0;
         gps_line_ready = 1;
