@@ -227,9 +227,6 @@ void DisableBMP() {
     BMP_CS.setHigh();
 }
 
-/*
-== GPT CODE == 
-*/
 
 // AltWindow_Push takes an altitude value, alt, and appends it to the smaller sized circular array "altWin"
 void AltWindow_Push(float alt) {
@@ -251,6 +248,3 @@ bool AltWindow_GetDelta(float *delta) {
     *delta = altWin.buf[newest] - altWin.buf[oldest];
     return true;
 }
-/*
- == GPT CODE ==
-*/

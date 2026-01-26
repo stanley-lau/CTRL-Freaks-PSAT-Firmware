@@ -4,7 +4,7 @@
 #include "hal/blocking_spi.hpp"
 #include <math.h>
 
-volatile bool ACCLReadyFlag = false;
+volatile bool accl_data_ready = false;
 
 // Accl SPI pins are routed incorrectly. Cannot be resolved in software. Function written assuming routing is correctly
 // InitACCL initialises SPI functionality 
@@ -136,7 +136,7 @@ void UpdateACCLStatus() {
 
     // Checking for data ready interrupt in the INT_STATUS register
     if (int_status_drdys & (1 << 0)) {      // Bit 0 is automatically sets to 1 when a Data Ready interrupt is generated
-        ACCLReadyFlag = true;               // Data is ready. After register has been read, bit 0 is set to 0. 
+        accl_data_ready = true;               // Data is ready. After register has been read, bit 0 is set to 0. 
     }
 }
 

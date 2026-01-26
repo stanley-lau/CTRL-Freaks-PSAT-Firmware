@@ -21,12 +21,12 @@
 #define GREEN_LED BIT6                  // Onboard LED
 
 // ADC
-#define ADCMAX 4095.00 //Correlating to 12 bits
-#define VREF  2.5
-#define RESISTOR 10000
-#define BETA 3380 
-#define RTHERM 10000
-#define T0_K 298.15 //25 degrees Celsius in Kelvin 
+#define ADCMAX 4096.00f //Correlating to 12 bits
+#define VREF  3.3f
+#define RESISTOR 9815.0f
+#define BETA 3380.0f 
+#define RTHERM 10000.0f
+#define T0_K 298.15f //25 degrees Celsius in Kelvin 
 
 // All these thresholds are placeholder values!!! Must be checked and updated!!! 
 #define CURRENT_MAX 2.0   // Max current in Amps
@@ -195,8 +195,7 @@ void UpdateFlightStateDemo(float delta, float accl_magnitude) {
             break;
 
         case LANDED:
-            // do nothing;
-            // Stay here to run recovery mode or manual shutdown 
+            // Return to main to activate RecoveryMode
             break;
             
         case SHUTDOWN:
@@ -235,37 +234,37 @@ void InitADC () {
 void StartADC(uint8_t channel) {
 
     ADCCTL0 &= ~ADCENC;                  // Must disable ADC
-    ADCMCTL0 = channel | ADCSREF_1;      // Set channel + AVCC ref
+    ADCMCTL0 = channel | ADCSREF_0;      // Set channel + AVCC ref
     ADCCTL0 |= ADCENC | ADCSC;           // Start conversion
-    __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
+    __bis_SR_register( GIE);        // Go into low power mode 0 with interrupts enabled
     
 }
 
-int16_t TempConversion(int16_t adcValue ) {
+int16_t TempConversion(volatile int16_t adcValue ) {
 	//converting adc count to voltage 
-	double voltage_temp = (adcValue / ADCMAX) * VREF; 
+	volatile double voltage_temp = (adcValue / ADCMAX) * VREF; 
 	
 	//calculate thermistor resistance 
-	double ThermistorResistance = RESISTOR * (VREF - voltage_temp)/ voltage_temp; // Should add error checking. ie dividing by 0
+	volatile double ThermistorResistance = RESISTOR * (VREF - voltage_temp)/ voltage_temp; // Should add error checking. ie dividing by 0
 
 	//apply beta formula 
-	double InvertedTemp = (1.0/T0_K) + (1.0/ BETA) * log(ThermistorResistance/RTHERM); // Log not defined. Will need to find a way to allow this without heavy resource consumption
-	double TempInKelvin = 1/InvertedTemp; 
+	volatile double InvertedTemp = (1.0/T0_K) + (1.0/ BETA) * log(ThermistorResistance/RTHERM); 
+	volatile double TempInKelvin = 1/InvertedTemp; 
 	
 	//convert to Celsius 
-	double TempInCelsius = TempInKelvin - 273.15;
+	volatile double TempInCelsius = TempInKelvin - 273.15;
 
 	return (int16_t)TempInCelsius;
 }
 
 // Return the temperature of the chamber 
 int16_t GetChamberTemp () {
-    uint16_t chamThermADC;
+    volatile uint16_t chamThermADC;
     uint16_t cham_ADC_temperature;
 
     // Chamber thermistor
     StartADC(ADC_CHAM_THERM);
-    
+    __bis_SR_register(CPUOFF | GIE);
     chamThermADC = adc_result; 
 
     // Convert temperatures
@@ -696,8 +695,8 @@ int main(void) {
         if (timer_expired)
         {
             timer_expired = 0;
-            // do the thing after 1 minutes
-            SetCoilPWM(0); // Turn LED OFF (Mock P:WM Coil)
+            // Execute task after 1 minute end
+            SetCoilPWM(0); // Turn LED OFF (Mock PWM Coil)
         }
 
         // other background work here. in this case it would be LoRa
@@ -710,10 +709,11 @@ int main(void) {
     */
 
 
-    /* ADC Testing: incorrect temeperation conversion. ISR trigger. use debug mode.
+    /*
+    //ADC Testing:
     WDTCTL = WDTPW | WDTHOLD;   // Stop watchdog timer
 
-    PMMCTL2 |= REFVSEL_2 + INTREFEN_1;           // Set reference voltage to be 2.5V, then enable the internal reference. 
+    PMMCTL2 |= REFVSEL_2 + INTREFEN_1;           // Set reference voltage to be 3.3V, then enable the internal reference. 
     while (!(PMMCTL2 & REFGENRDY));             // Wait until V_ref is ready to be used. Previously: __delay_cycles(1000);
 
     P1DIR |= BIT0;             // RED LED as output
@@ -744,8 +744,9 @@ int main(void) {
     }
     */
     
+    
     /*
-    // GPS Testing. Entering interrupts to get NMEA values. Still need to parse value and get lon and lat values. 
+    // GPS Testing. Entering interrupts to get NMEA values.  
     WDTCTL = WDTPW | WDTHOLD;
     initClock16MHz();
 
@@ -769,6 +770,9 @@ int main(void) {
     current_flight_state = PREFLIGHT;
     UpdateFlightStateDemo(10, 10); 
     UpdateFlightStateDemo(2, 2); 
-    */
 
-}
+    if (current_flight_state == LANDED) {
+        //RecoveryMode2();
+    }
+    */
+} 

@@ -12,4 +12,4 @@ void UpdateACCLStatus();
 float ReadACCL();
 void DisableACCL();
 
-extern volatile bool ACCLReadyFlag;
+extern volatile bool accl_data_ready;
