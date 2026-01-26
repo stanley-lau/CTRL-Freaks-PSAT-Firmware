@@ -138,6 +138,7 @@ void SetCoilPWM(uint8_t duty_cycle) {
     Modified from updateFlightState();
     This code should ultilse BOTH sensor's readings to determine the state 
 */
+
 void UpdateFlightState() {
     float delta;
     
@@ -175,6 +176,33 @@ void UpdateFlightState() {
     }
 }
 
+void UpdateFlightStateDemo(float delta, float accl_magnitude) {
+    switch (current_flight_state) {
+        case PREFLIGHT:
+        // Detect launch: altitude change (current altitude jumps from ground altitude_ + movement (acceleration value > 0)
+            if (delta > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
+                prev_flight_state = PREFLIGHT;
+                current_flight_state = FLIGHT;
+            }
+            break;
+            
+        case FLIGHT:
+        // Detect landing: altitude change small/altitude approx ground altitude AND near-zero acceleration
+            if (delta < ALTITUDE_THRESHOLD && accl_magnitude < ACCL_THRESHOLD) {
+                prev_flight_state = FLIGHT;
+                current_flight_state = LANDED;
+            }
+            break;
+
+        case LANDED:
+            // do nothing;
+            // Stay here to run recovery mode or manual shutdown 
+            break;
+            
+        case SHUTDOWN:
+            break;
+    }
+}
 
 /* -------------------------------ADC------------------------------- */
 
@@ -712,7 +740,9 @@ int main(void) {
         
     }
     */
-
+    
+    /*
+    // GPS Testing. Entering interrupts to get NMEA values. Still need to parse value and get lon and lat values. 
     WDTCTL = WDTPW | WDTHOLD;
     initClock16MHz();
 
@@ -730,4 +760,9 @@ int main(void) {
     make sure to unlock GPIO ONCE at the end of all the inits in main(); 
     maybe we can start compounding different components together? esp for landing
     */
+
+    // Demonstrate change in flight state. Passing in mock delta altitude value, and acceleration magnitude. 
+    current_flight_state = PREFLIGHT;
+    UpdateFlightStateDemo(10, 10); 
+    UpdateFlightStateDemo(2, 2); 
 }
