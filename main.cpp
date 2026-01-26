@@ -28,10 +28,10 @@
 #define RTHERM 10000.0f
 #define T0_K 298.15f //25 degrees Celsius in Kelvin 
 
-// All these thresholds are placeholder values!!! Must be checked and updated!!! 
-#define CURRENT_MAX 2.0   // Max current in Amps
-#define BATTERY_MAX 2.0
-#define CHAMBER_MAX 2.0
+// Threshold values based on testing and material properties. 
+#define CURRENT_MAX 7.26   // Max current in Amps
+#define BATTERY_MAX 60     // Max temperature in celsius
+#define CHAMBER_MAX 200
 
 #define R_SENSE 0.1       // Shunt resistor in Ohms
 
@@ -362,7 +362,7 @@ __interrupt void Timer3_B0_ISR(void)
     }
 }
 
-// Example Template of Background Timer in main()
+// Example Working Template of Background Timer in main()
 /*
     WDTCTL = WDTPW | WDTHOLD;
 
@@ -387,14 +387,100 @@ __interrupt void Timer3_B0_ISR(void)
 
 */
 
-// ====== Working Background Timer Dump (above)====== //
+// =======================================
 
+#define GPS_BUFFER_SIZE 128
+volatile char gps_buffer[GPS_BUFFER_SIZE];
+volatile uint8_t gps_index = 0;
+volatile uint8_t gps_line_ready = 0;
 
+// Initialise UART pins for GPS
+void initGPSUART(){
+    // Configure pins for UART
+    P1SEL0 |= BIT6 | BIT7;   // RX + TX
+    P1SEL1 &= ~(BIT6 | BIT7);
+    // TX not used
+
+    // Configure UART
+    // Put eUSCI in reset
+    UCA0CTLW0 = UCSWRST;              
+
+    // Select SMCLK as clock source
+    UCA0CTLW0 |= UCSSEL__SMCLK;
+
+    // // Baud rate: 16MHz / 9600
+    // UCA0BRW = 104;                      
+    // UCA0MCTLW = UCOS16 | UCBRF_2 | 0x4900;
+
+    // Baud rate 115200, SMCLK = 16MHz, oversampling
+    UCA0BRW = 8;                   // Integer part
+    UCA0MCTLW = UCOS16 | (11 << 4) | 0xD600; // UCBRFx = 11, UCBRSx = 0xD6
+    
+    // Release eUSCI from reset
+    UCA0CTLW0 &= ~UCSWRST;
+
+    PM5CTL0 &= ~LOCKLPM5; // Unlock GPIO
+
+    // Enable RX interrupt before releasing reset
+    UCA0IE |= UCRXIE;
+}
+
+// UART ISR
+#pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
+__interrupt void USCIA1RX_ISR(void){
+    
+    P1OUT ^= BIT0;              // Toggle LED for debuggign
+    char received = UCA0RXBUF;
+    if (received == '\n') {
+        gps_buffer[gps_index] = '\0';
+        gps_index = 0;
+        gps_line_ready = 1;
+    }
+    else {
+        if (gps_index < GPS_BUFFER_SIZE - 1) {
+            gps_buffer[gps_index++] = received;
+        } else {
+            gps_index = 0;
+        }
+    }
+}
+
+// initADCGPIO intialises all 3 GPIO pins as analog inputs for the ADC
+void InitADCGPIO(){
+    // P5.0 (Chamber Thermister Temperature)
+    P5SEL0 |= BIT0;
+    P5SEL1 |= BIT0;
+
+    // P5.2 (Battery Thermister Temperature)
+    P5SEL0 |= BIT2;
+    P5SEL1 |= BIT2;
+
+    // P5.3 (Current Sense Value)
+    P5SEL0 |= BIT3;
+    P5SEL1 |= BIT3;
+
+}
+
+void InitClock16MHz(void){
+    CSCTL0_H = 0xA5;          // Unlock CS registers
+    CSCTL1 = 0x0040;          // DCO = 16 MHz
+    CSCTL2 = 0x0033; // SMCLK = MCLK = DCO
+    CSCTL3 = 0x0000;  // No division
+    CSCTL0_H = 0x00;                // Lock CS registers
+}
+
+void ClearGPSBuffer(void){
+    uint8_t i;
+    for (i = 0; i < GPS_BUFFER_SIZE; i++) {
+        gps_buffer[i] = 0;
+    }
+    gps_index = 0;
+    gps_line_ready = 0;
+}
 
 // =======================================
 
-
-void RecoveryMode2(void) {
+void RecoveryMode(void) {
     uint8_t duty_cycle = 0;
     bool pwm_enabled = false;
     bool initial_delay_done = false;
@@ -473,102 +559,7 @@ void RecoveryMode2(void) {
     }
 }
 
-// Initialise UART pins for GPS
-void initGPSUART(){
-    // Configure pins for UART
-    P1SEL0 |= BIT6 | BIT7;   // RX + TX
-    P1SEL1 &= ~(BIT6 | BIT7);
-    // TX not used
-
-    // Configure UART
-    // Put eUSCI in reset
-    UCA0CTLW0 = UCSWRST;              
-
-    // Select SMCLK as clock source
-    UCA0CTLW0 |= UCSSEL__SMCLK;
-
-    // // Baud rate: 16MHz / 9600
-    // UCA0BRW = 104;                      
-    // UCA0MCTLW = UCOS16 | UCBRF_2 | 0x4900;
-
-    // Baud rate 115200, SMCLK = 16MHz, oversampling
-    UCA0BRW = 8;                   // Integer part
-    UCA0MCTLW = UCOS16 | (11 << 4) | 0xD600; // UCBRFx = 11, UCBRSx = 0xD6
-    
-    // Release eUSCI from reset
-    UCA0CTLW0 &= ~UCSWRST;
-
-    PM5CTL0 &= ~LOCKLPM5; // Unlock GPIO
-
-    // Enable RX interrupt before releasing reset
-    UCA0IE |= UCRXIE;
-}
-
-
-#define GPS_BUFFER_SIZE 128
-volatile char gps_buffer[GPS_BUFFER_SIZE];
-volatile uint8_t gps_index = 0;
-volatile uint8_t gps_line_ready = 0;
-
-// UART ISR
-#pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
-__interrupt void USCIA1RX_ISR(void){
-    
-    P1OUT ^= BIT0;              // Toggle LED for debuggign
-    char received = UCA0RXBUF;
-    if (received == '\n') {
-        gps_buffer[gps_index] = '\0';
-        gps_index = 0;
-        gps_line_ready = 1;
-    }
-    else {
-        if (gps_index < GPS_BUFFER_SIZE - 1) {
-            gps_buffer[gps_index++] = received;
-        } else {
-            gps_index = 0;
-        }
-    }
-}
-
-
-
-// initADCGPIO intialises all 3 GPIO pins as analog inputs for the ADC
-void initADCGPIO(){
-    // P5.0 (Chamber Thermister Temperature)
-    P5SEL0 |= BIT0;
-    P5SEL1 |= BIT0;
-
-    // P5.2 (Battery Thermister Temperature)
-    P5SEL0 |= BIT2;
-    P5SEL1 |= BIT2;
-
-    // P5.3 (Current Sense Value)
-    P5SEL0 |= BIT3;
-    P5SEL1 |= BIT3;
-
-}
-
-void initClock16MHz(void){
-    CSCTL0_H = 0xA5;          // Unlock CS registers
-    CSCTL1 = 0x0040;          // DCO = 16 MHz
-    CSCTL2 = 0x0033; // SMCLK = MCLK = DCO
-    CSCTL3 = 0x0000;  // No division
-    CSCTL0_H = 0x00;                // Lock CS registers
-}
-
-void ClearGPSBuffer(void){
-    uint8_t i;
-    for (i = 0; i < GPS_BUFFER_SIZE; i++) {
-        gps_buffer[i] = 0;
-    }
-    gps_index = 0;
-    gps_line_ready = 0;
-}
-
-
-/*
-Main code; should be kept as clean as possible.
-*/
+// =======================================
 
 int main(void) {
     // bool recovery_active = false;
@@ -632,7 +623,7 @@ int main(void) {
     //         case LANDED:
     //             if (!recovery_active){
     //                 // Enter recovery
-    //                 RecoveryMode2();
+    //                 RecoveryMode();
     //                 recovery_active = true;
     //             }
     //             break;
@@ -758,11 +749,6 @@ int main(void) {
 	__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
 
     //Notes: could use a polling approach instead of int if GPS enable pin isn't wired.
-
-    /*
-    Re-write ADC INIT with working code and retest?
-    make sure to unlock GPIO ONCE at the end of all the inits in main(); 
-    maybe we can start compounding different components together? esp for landing
     */
 
     /*
@@ -772,7 +758,7 @@ int main(void) {
     UpdateFlightStateDemo(2, 2); 
 
     if (current_flight_state == LANDED) {
-        //RecoveryMode2();
+        //RecoveryMode();
     }
     */
 } 
