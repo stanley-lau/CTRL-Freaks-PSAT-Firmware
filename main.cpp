@@ -21,49 +21,52 @@
 #define GREEN_LED BIT6                  // Onboard LED
 
 // ADC
-#define ADCMAX 4096.00f //Correlating to 12 bits
+#define ADCMAX 4095.00f //Correlating to 12 bits
 #define VREF  3.3f
 #define RESISTOR 9815.0f
 #define BETA 3380.0f 
 #define RTHERM 10000.0f
 #define T0_K 298.15f //25 degrees Celsius in Kelvin 
 
-// Threshold values based on testing and material properties. 
-#define CURRENT_MAX 7.26   // Max current in Amps
-#define BATTERY_MAX 60     // Max temperature in celsius
-#define CHAMBER_MAX 200
-
-#define R_SENSE 0.1       // Shunt resistor in Ohms
-
 // ADC pins
 #define ADC_CHAM_THERM   ADCINCH_8    // P5.0 / A8
 #define ADC_BAT_THERM    ADCINCH_10   // P5.2 / A10
 #define ADC_CUR_SENSE    ADCINCH_11   // P5.3 / A11
 
+// UpdateFlightState
+#define ACCL_THRESHOLD        3       // m^2/s. 
+#define ALTITUDE_THRESHOLD    5       // meters
+
+// Threshold values based on testing and material properties. 
+#define CURRENT_MAX 7.26   // Max current in Amps
+#define BATTERY_MAX 60     // Max temperature in Celsius
+#define CHAMBER_MAX 200
+
+#define R_SENSE 0.1       // Shunt resistor in Ohms
+
+// GPS 
+#define GPS_BUFFER_SIZE 128
 
 // ==== Interrupts ==== //
 
-// BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code will run.
+// BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code run to notify BMP Data is ready. 
 volatile bool bmp_data_ready = false;
-
 #pragma vector=PORT2_VECTOR
 __interrupt void PORT2_ISR(void) {
-    if (P2IFG & BIT4) {                     // if Bit4 on Port2 is set (BMP_INT)
-        bmp_data_ready = true;                // Signal main loop
+    if (P2IFG & BIT4) {                     // If Bit4 on Port2 is set (BMP_INT)
+        bmp_data_ready = true;              // Signal main loop that BMP data is ready. 
         P2IFG &= ~BIT4;                     // MUST clear flag
     }
 }
 
-// ADC Interrupt: interrupt that read ADC memory
+// ADC Interrupt: Interrupt that read ADC memory into a global variable
 volatile uint16_t adc_result;
-
 #pragma vector=ADC_VECTOR
 __interrupt void ADC_ISR(void) {
-
     switch (__even_in_range(ADCIV, ADCIV_ADCIFG))
     {
         case ADCIV__ADCIFG0:
-            adc_result = ADCMEM0;   // Read clears ADCIFG0
+            adc_result = ADCMEM0;   // After memory is read, ADCIFG0 is cleared. 
             P1OUT ^= BIT0;
             __bic_SR_register_on_exit(CPUOFF);
             break;
@@ -71,8 +74,6 @@ __interrupt void ADC_ISR(void) {
         default:
             break;
     }
-
-    
 }
 
 // ==== FlightStates ==== // 
@@ -87,24 +88,17 @@ float initial_altitude = 0.0f;
 // Avoid writing to TB2CTL after init
 void InitCoilPWM(){
     // Setup Pins
-    P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to 1. (1 = Output) BIT1 Corresponds to PIN1 on the Port.
+    P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to output. BIT1 Corresponds to PIN1 on the Port.
     
-    /*
-    P5SEL0 &= ~BIT1;                            // Clear BIT1 in P5SEL0. Now P5SEL0 BIT1 = 0
-	P5SEL1 |= BIT1;                             // Set BIT1 in P5SEL1. Now P5SEL1 BIT1 = 1
-    // 10b = Secondary module function is selected which correspond to the timer Timer_B2.
-    */
-
-
-    P5SEL0 |= BIT1;     // Set P5SEL0 = 1
-    P5SEL1 &= ~BIT1;    // Set P5SEL1 = 0
+    P5SEL0 |= BIT1;     // Set BIT 1 of P5SEL0 = 1
+    P5SEL1 &= ~BIT1;    // Set BIT 1 of P5SEL1 = 0
     //Page 104 --> 01b = select timer Timer_B2
     
     PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO
 
     // Setup Compare Reg
     TB2CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
-    TB2CCR2 = 0;                                 // 0% duty cycle
+    TB2CCR2 = 0;                                // 0% duty cycle
     TB2CCTL2 = OUTMOD_7;                        // Reset/Set PWM mode, refer to YT vid
     // TB2CCRn is the timer attached to Port P5 from Table 6-67
 
@@ -131,14 +125,8 @@ void SetCoilPWM(uint8_t duty_cycle) {
     }
 }
 
-// Both placeholder value that should be checked 
-#define ACCL_THRESHOLD        5 
-#define ALTITUDE_THRESHOLD    5  
-/*
-    Modified from updateFlightState();
-    This code should ultilse BOTH sensor's readings to determine the state 
-*/
-
+// Utilise BOTH sensor's reading of altitude and acceleration to determine current flight state. 
+// Compare value against initial calculated altitude and pressure to determine change. 
 void UpdateFlightState() {
     float delta;
     
@@ -151,7 +139,7 @@ void UpdateFlightState() {
     switch (current_flight_state) {
         
         case PREFLIGHT:
-        // Detect launch: altitude change (current altitude jumps from ground altitude_ + movement (acceleration value > 0)
+        // Detect launch: altitude change (current altitude jumps from ground altitude) + movement (acceleration value > 0)
             if (delta > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
                 prev_flight_state = PREFLIGHT;
                 current_flight_state = FLIGHT;
@@ -159,7 +147,7 @@ void UpdateFlightState() {
             break;
             
         case FLIGHT:
-        // Detect landing: altitude change small/altitude approx ground altitude AND near-zero acceleration
+        // Detect landing: altitude change negligible/altitude approx ground altitude AND negligible acceleration
             if (delta < ALTITUDE_THRESHOLD && accl_magnitude < ACCL_THRESHOLD) {
                 prev_flight_state = FLIGHT;
                 current_flight_state = LANDED;
@@ -167,8 +155,6 @@ void UpdateFlightState() {
             break;
 
         case LANDED:
-            // do nothing;
-            // Stay here to run recovery mode or manual shutdown 
             break;
             
         case SHUTDOWN:
@@ -176,10 +162,11 @@ void UpdateFlightState() {
     }
 }
 
+// Demonstration of how sensor's reading of altitude and acceleration is used to determine current flight state. 
 void UpdateFlightStateDemo(float delta, float accl_magnitude) {
     switch (current_flight_state) {
         case PREFLIGHT:
-        // Detect launch: altitude change (current altitude jumps from ground altitude_ + movement (acceleration value > 0)
+        // Detect launch: altitude change (current altitude jumps from ground altitude) + movement (acceleration value > 0)
             if (delta > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
                 prev_flight_state = PREFLIGHT;
                 current_flight_state = FLIGHT;
@@ -187,7 +174,7 @@ void UpdateFlightStateDemo(float delta, float accl_magnitude) {
             break;
             
         case FLIGHT:
-        // Detect landing: altitude change small/altitude approx ground altitude AND near-zero acceleration
+        // Detect landing: altitude change negligible/altitude approx ground altitude AND negligible acceleration
             if (delta < ALTITUDE_THRESHOLD && accl_magnitude < ACCL_THRESHOLD) {
                 prev_flight_state = FLIGHT;
                 current_flight_state = LANDED;
@@ -195,7 +182,6 @@ void UpdateFlightStateDemo(float delta, float accl_magnitude) {
             break;
 
         case LANDED:
-            // Return to main to activate RecoveryMode
             break;
             
         case SHUTDOWN:
@@ -205,30 +191,35 @@ void UpdateFlightStateDemo(float delta, float accl_magnitude) {
 
 /* -------------------------------ADC------------------------------- */
 
-// Not currently used.
+// Initialise ADC for use. 
 void InitADC () {
-    /*
-    may need to write code for this init. 
-    clock_init();
-    gpio_init();
-    */
+    WDTCTL = WDTPW | WDTHOLD;   // Stop watchdog timer
 
-    PMMCTL2 |= REFVSEL_2 + INTREFEN_1;           // Set reference voltage to be 2.5V, then enable the internal reference. 
-    while (!(PMMCTL2 & REFGENRDY));             // Wait until V_ref is ready to be used. Previously: __delay_cycles(1000);
-  
-    ADCCTL1 |= ADCDIV_2 + ADCSHP_0;              // Divide input clock by 3 and select source to be sample-input
+    PMMCTL2 |= REFVSEL_2 + INTREFEN_1;          // Enable and set the internal reference voltage. 
+    while (!(PMMCTL2 & REFGENRDY));             // Wait until V_ref is ready to be used.
+}
 
-    ADCCTL2 &= ~ADCRES;                         // Clear bits/resolution value 
-   
-    ADCCTL2 |= ADCRES_2;                        // 12-bit resolution for the conversion result
+// InitADCGPIO intialises all 3 GPIO pins as analog inputs for the ADC
+void InitADCGPIO(){
+    // P5.0 (Chamber Thermister Temperature)
+    P5SEL0 |= BIT0;
+    P5SEL1 |= BIT0;
 
-    ADCIE |= ADCIE0;                            // Enable interrupts 
+    // P5.2 (Battery Thermister Temperature)
+    P5SEL0 |= BIT2;
+    P5SEL1 |= BIT2;
 
-    ADCCTL0 |= ADCSHT_4 + ADCON;                 // sample and hold for 64 clock cycles, enable ADC.
+    // P5.3 (Current Sense Value)
+    P5SEL0 |= BIT3;
+    P5SEL1 |= BIT3;
 
-    __delay_cycles(100);						// Wait for reference to settle
+}
 
-    PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO / LPMx.5 Lock Bit  // This should be in main and be unlocked after all inits
+void ConfigADC() {
+    ADCCTL0 = ADCSHT_4 | ADCON;                         // Sample and Hold time for 64 clk cycles | enable ADC (Start conversion later)
+    ADCCTL1 = ADCSSEL_2 | ADCSHP;                       // Select SMCLK | signal sourced from sampling timer.
+    ADCCTL2 = ADCRES_2;                                 // Set 12-Bit ADC Resolution
+    ADCIE = ADCIE0;                                     // Enable interrupts
 }
 
 void StartADC(uint8_t channel) {
@@ -236,8 +227,7 @@ void StartADC(uint8_t channel) {
     ADCCTL0 &= ~ADCENC;                  // Must disable ADC
     ADCMCTL0 = channel | ADCSREF_0;      // Set channel + AVCC ref
     ADCCTL0 |= ADCENC | ADCSC;           // Start conversion
-    __bis_SR_register( GIE);        // Go into low power mode 0 with interrupts enabled
-    
+    __bis_SR_register( GIE);             // Go into low power mode 0 with interrupts enabled
 }
 
 int16_t TempConversion(volatile int16_t adcValue ) {
@@ -267,6 +257,7 @@ int16_t GetChamberTemp () {
     __bis_SR_register(CPUOFF | GIE);
     chamThermADC = adc_result; 
 
+    
     // Convert temperatures
     cham_ADC_temperature = TempConversion(chamThermADC);
     return cham_ADC_temperature;
@@ -274,10 +265,11 @@ int16_t GetChamberTemp () {
 
 // Return the temperature of the battery 
 int16_t GetBatteryTemp () {
-    uint16_t batThermADC;
+    volatile uint16_t batThermADC;
 
     // Battery thermistor
     StartADC(ADC_BAT_THERM);
+    __bis_SR_register(CPUOFF | GIE);
     batThermADC = adc_result;
 
     return TempConversion(batThermADC);
@@ -289,8 +281,9 @@ double CurrentSense () {
 
     // Current sense
     StartADC(ADC_CUR_SENSE);
-    __bis_SR_register(CPUOFF + GIE);        // Go into low power mode 0 with interrupts enabled
-    curSenseADC = adc_result;       
+    __bis_SR_register(CPUOFF + GIE);        
+    curSenseADC = adc_result;   
+
     double current = ((double)curSenseADC / ADCMAX) * VREF / R_SENSE;       // Convert ADC to current 
     return current;
 }   
@@ -307,24 +300,25 @@ void currExceedThreshold() {
 }
 */
 
+
 bool CurrExceedsThreshold() {
     double current = CurrentSense();  // Gets current value 
-    return (current > CURRENT_MAX);   // Threshold currently has placeholder value. Returns true if over threshold, false otherwise
+    return (current > CURRENT_MAX);   // Returns true if over threshold, false otherwise
 }
 
 bool BatExceedsThreshold() {
     double battery = GetBatteryTemp();   
-    return (battery > BATTERY_MAX);   // Threshold currently has placeholder value. 
+    return (battery > BATTERY_MAX);   
 }
 
 bool ChamExceedsThreshold() {
     double chamber = GetChamberTemp();   
-    return (chamber > CHAMBER_MAX);   // Threshold currently has placeholder value. 
+    return (chamber > CHAMBER_MAX);   
 }
 
 
 
-// ====== Working Background Timer Dump ====== //
+// ====== Working Background Timer ====== //
 
 // Global variables
 volatile uint16_t delay_seconds = 0;
@@ -339,7 +333,7 @@ void start_delay_seconds(uint16_t seconds)
     __enable_interrupt();
 }
 
-// Init Timer_B for 1 second tick
+// Initialise Timer_B for tick every 1 second. 
 void Timer3_init_1s_tick(void)
 {
     TB3CTL = TBSSEL__ACLK | MC__UP | TBCLR;
@@ -347,7 +341,7 @@ void Timer3_init_1s_tick(void)
     TB3CCTL0 = CCIE;
 }
 
-// ISR
+// ISR. Interrupt is called every second, decrementing delay time until 0. 
 #pragma vector = TIMER3_B0_VECTOR
 __interrupt void Timer3_B0_ISR(void)
 {
@@ -387,15 +381,15 @@ __interrupt void Timer3_B0_ISR(void)
 
 */
 
-// =======================================
 
-#define GPS_BUFFER_SIZE 128
+// ======================  GPS   ======================
+
 volatile char gps_buffer[GPS_BUFFER_SIZE];
 volatile uint8_t gps_index = 0;
 volatile uint8_t gps_line_ready = 0;
 
 // Initialise UART pins for GPS
-void initGPSUART(){
+void InitGPSUART(){
     // Configure pins for UART
     P1SEL0 |= BIT6 | BIT7;   // RX + TX
     P1SEL1 &= ~(BIT6 | BIT7);
@@ -429,7 +423,7 @@ void initGPSUART(){
 #pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
 __interrupt void USCIA1RX_ISR(void){
     
-    P1OUT ^= BIT0;              // Toggle LED for debuggign
+    P1OUT ^= BIT0;              // Toggle LED for debugging
     char received = UCA0RXBUF;
     if (received == '\n') {
         gps_buffer[gps_index] = '\0';
@@ -445,28 +439,12 @@ __interrupt void USCIA1RX_ISR(void){
     }
 }
 
-// initADCGPIO intialises all 3 GPIO pins as analog inputs for the ADC
-void InitADCGPIO(){
-    // P5.0 (Chamber Thermister Temperature)
-    P5SEL0 |= BIT0;
-    P5SEL1 |= BIT0;
-
-    // P5.2 (Battery Thermister Temperature)
-    P5SEL0 |= BIT2;
-    P5SEL1 |= BIT2;
-
-    // P5.3 (Current Sense Value)
-    P5SEL0 |= BIT3;
-    P5SEL1 |= BIT3;
-
-}
-
 void InitClock16MHz(void){
     CSCTL0_H = 0xA5;          // Unlock CS registers
     CSCTL1 = 0x0040;          // DCO = 16 MHz
-    CSCTL2 = 0x0033; // SMCLK = MCLK = DCO
-    CSCTL3 = 0x0000;  // No division
-    CSCTL0_H = 0x00;                // Lock CS registers
+    CSCTL2 = 0x0033;          // SMCLK = MCLK = DCO
+    CSCTL3 = 0x0000;          // No division
+    CSCTL0_H = 0x00;          // Lock CS registers
 }
 
 void ClearGPSBuffer(void){
@@ -633,8 +611,38 @@ int main(void) {
     // }
 
 
-    /* Successful pulsing of PWM using LED
-    WDTCTL = WDTPW + WDTHOLD; // Stop WDT
+    /*
+    // GPS Testing. Entering interrupts to get NMEA values.  
+    WDTCTL = WDTPW | WDTHOLD;
+    InitClock16MHz();
+
+    P1DIR |= BIT0;             // RED LED as output
+    P1OUT &= ~BIT0;            // Turn RED LED off
+    ClearGPSBuffer();
+    InitGPSUART();
+
+	__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
+    */
+
+
+    /*
+    // Demonstrate change in flight state. Passing in mock delta altitude value, and acceleration magnitude. 
+    current_flight_state = PREFLIGHT;
+    UpdateFlightStateDemo(10, 10); 
+    UpdateFlightStateDemo(2, 2); 
+
+    if (current_flight_state == LANDED) {
+        RecoveryMode();
+    }
+    */
+    
+    
+    
+
+
+    
+    //Successful pulsing of PWM using LED
+    WDTCTL = WDTPW + WDTHOLD; // Stop Watchdog Timer
     InitCoilPWM();
 
     while (1)
@@ -650,14 +658,16 @@ int main(void) {
             __delay_cycles(50 * PWM_PERIOD);
 		}
 	}
-    */
+    
+    
 
 
 
-    /* Sucessfull testing with toggling LEDs with background timer.
+    /*
+    //Sucessful testing of toggling LEDs with background timer.
     WDTCTL = WDTPW | WDTHOLD;
 
-    // Init timer
+    // Initialise timer
     Timer3_init_1s_tick();
 
     // Init PWM
@@ -673,8 +683,8 @@ int main(void) {
 
     __enable_interrupt();
 
-    // Being 1-minute timer
-    start_delay_seconds(60);   // start 1-minute timer
+    // Being 40 seconds timer
+    start_delay_seconds(40);   // start 40 seconds timer
     SetCoilPWM(100); // Turn LED ON
 
     // Set initial values - red LED on, green LED off.
@@ -686,7 +696,7 @@ int main(void) {
         if (timer_expired)
         {
             timer_expired = 0;
-            // Execute task after 1 minute end
+            // Execute task after 40 seconds end
             SetCoilPWM(0); // Turn LED OFF (Mock PWM Coil)
         }
 
@@ -702,24 +712,15 @@ int main(void) {
 
     /*
     //ADC Testing:
-    WDTCTL = WDTPW | WDTHOLD;   // Stop watchdog timer
-
-    PMMCTL2 |= REFVSEL_2 + INTREFEN_1;           // Set reference voltage to be 3.3V, then enable the internal reference. 
-    while (!(PMMCTL2 & REFGENRDY));             // Wait until V_ref is ready to be used. Previously: __delay_cycles(1000);
+    InitADC();
 
     P1DIR |= BIT0;             // RED LED as output
     P1OUT &= ~BIT0;            // Turn RED LED off
 
     // Configure P5.0
-    // P5SEL0 |= BIT0;
-    // P5SEL1 |= BIT0;
-    initADCGPIO();
+    InitADCGPIO();
 
-    // Configure ADC
-    ADCCTL0 = ADCSHT_4 | ADCON;                         // Sample and Hold time for 64 clk cycles | enable ADC (Start conversion later)
-    ADCCTL1 = ADCSSEL_2 | ADCSHP;                       // Select SMCLK | signal sourced from sampling timer.
-    ADCCTL2 = ADCRES_2;                                 // Set 12-Bit ADC Resolution
-    ADCIE = ADCIE0;                                     // Enable interrupts
+    ConfigADC();
 
     PM5CTL0 &= ~LOCKLPM5;   // Unlock GPIO pins
 
@@ -728,37 +729,10 @@ int main(void) {
 
     while(1)
     {
-        // 4. Start Conversion
+        // Start Conversion
         chamber_temperature = GetChamberTemp();
         battery_temperature = GetBatteryTemp();
         
-    }
-    */
-    
-    
-    /*
-    // GPS Testing. Entering interrupts to get NMEA values.  
-    WDTCTL = WDTPW | WDTHOLD;
-    initClock16MHz();
-
-    P1DIR |= BIT0;             // RED LED as output
-    P1OUT &= ~BIT0;            // Turn RED LED off
-    ClearGPSBuffer();
-    initGPSUART();
-
-	__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
-
-    //Notes: could use a polling approach instead of int if GPS enable pin isn't wired.
-    */
-
-    /*
-    // Demonstrate change in flight state. Passing in mock delta altitude value, and acceleration magnitude. 
-    current_flight_state = PREFLIGHT;
-    UpdateFlightStateDemo(10, 10); 
-    UpdateFlightStateDemo(2, 2); 
-
-    if (current_flight_state == LANDED) {
-        //RecoveryMode();
     }
     */
 } 
