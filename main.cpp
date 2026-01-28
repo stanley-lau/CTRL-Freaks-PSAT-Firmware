@@ -393,6 +393,13 @@ volatile double longitude = 0.0; // make double for precision!!! not int
 volatile double latitude = 0.0;
 volatile uint8_t gps_sats = 0;
 
+/*
+Connect:
+MSP430 P1.6 (TEMP UART RX) <-- GPS TX PIN
+MSP430 3v3 -- GPS 3v3
+MSP430 GND -- GPS GND: 
+*/
+
 // Initialise UART pins for GPS
 void InitGPSUART(){
     // Configure pins for UART
