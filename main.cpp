@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include "util.h"
 #include <math.h> 
+#include <string.h>
+#include <stdlib.h>
 
 #include "hal/gpio.hpp"
 #include "hal/blocking_spi.hpp"
@@ -387,6 +389,9 @@ __interrupt void Timer3_B0_ISR(void)
 volatile char gps_buffer[GPS_BUFFER_SIZE];
 volatile uint8_t gps_index = 0;
 volatile uint8_t gps_line_ready = 0;
+volatile double longitude = 0.0; // make double for precision!!! not int
+volatile double latitude = 0.0;
+volatile uint8_t gps_sats = 0;
 
 // Initialise UART pins for GPS
 void InitGPSUART(){
@@ -421,14 +426,21 @@ void InitGPSUART(){
 
 // UART ISR
 #pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
-__interrupt void USCIA1RX_ISR(void){
+__interrupt void EUSCI_A0_ISR(void){
     
     P1OUT ^= BIT0;              // Toggle LED for debugging
     char received = UCA0RXBUF;
+
+    /*
+    // ignore NULL bytes
+    if (received == 0){
+        return;
+    } 
     if (received == '\n') {
         gps_buffer[gps_index] = '\0';
         gps_index = 0;
         gps_line_ready = 1;
+        __bic_SR_register_on_exit(CPUOFF);
     }
     else {
         if (gps_index < GPS_BUFFER_SIZE - 1) {
@@ -437,6 +449,25 @@ __interrupt void USCIA1RX_ISR(void){
             gps_index = 0;
         }
     }
+    */
+    
+    // Only store printable characters, comma, and newline
+    if ((received >= 32 && received <= 126) || received == ',' || received == '\n') {
+        if (gps_index < GPS_BUFFER_SIZE - 1) {
+            gps_buffer[gps_index++] = received;
+        } else {
+            gps_index = 0; // reset on overflow
+        }
+    }
+
+    // End of line
+    if (received == '\n') {
+        gps_buffer[gps_index] = '\0';
+        gps_index = 0;
+        gps_line_ready = 1;
+        __bic_SR_register_on_exit(CPUOFF);
+    }
+    
 }
 
 void InitClock16MHz(void){
@@ -455,6 +486,70 @@ void ClearGPSBuffer(void){
     gps_index = 0;
     gps_line_ready = 0;
 }
+
+// Locate GNGGA sentences
+static inline bool is_gngga(const char *s) {
+    return (s[0] == '$' &&
+            s[1] == 'G' &&
+            s[2] == 'N' &&
+            s[3] == 'G' &&
+            s[4] == 'G' &&
+            s[5] == 'A');
+}
+
+double nmea_to_decimal(double coord, char hemi) {
+    int deg = (int)(coord / 100.0);
+    double min = coord - (deg * 100.0);
+    double dec = deg + min / 60.0;
+
+    if (hemi == 'S' || hemi == 'W')
+        dec = -dec;
+
+    return dec;
+}
+
+void parse_gngga(char *line) {
+    if (!is_gngga(line)){
+        return;
+    }
+    
+    char *token;
+    uint8_t field = 0;
+
+    double lat_raw = 0.0;
+    double lon_raw = 0.0;
+    char ns = 0, ew = 0;
+    uint8_t fix = 0;
+    uint8_t sats = 0;
+
+    token = strtok(line, ",");
+
+    while (token) {
+        field++;
+
+        if (field == 3) lat_raw = atof(token);
+        else if (field == 4) ns = token[0];
+        else if (field == 5) lon_raw = atof(token);
+        else if (field == 6) ew = token[0];
+        else if (field == 7) fix = atoi(token);
+        else if (field == 8) sats = atoi(token);
+
+        token = strtok(NULL, ",");
+    }
+
+    //if (fix == 0) return;   // no GPS fix
+
+    double lat = nmea_to_decimal(lat_raw, ns);
+    double lon = nmea_to_decimal(lon_raw, ew);
+
+    latitude = lat;
+    longitude = lon;
+    gps_sats = sats;
+
+    // store / transmit lat & lon
+    __no_operation();
+}
+
 
 // =======================================
 
@@ -611,7 +706,7 @@ int main(void) {
     // }
 
 
-    /*
+    
     // GPS Testing. Entering interrupts to get NMEA values.  
     WDTCTL = WDTPW | WDTHOLD;
     InitClock16MHz();
@@ -621,8 +716,24 @@ int main(void) {
     ClearGPSBuffer();
     InitGPSUART();
 
-	__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
-    */
+	//__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
+    
+    while(1){
+        __bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
+        if (gps_line_ready) {
+            gps_line_ready = 0;
+
+            /* Loops through buffer to clear NULL
+            // --- Add this BEFORE calling parse_gpgga --- sanitise buffer before passing to remove NULL which stops strtok from working
+            for (int i = 0; i < gps_index; i++) {
+                if (gps_buffer[i] == 0) gps_buffer[i] = ',';  // replace nulls with comma
+            }
+            gps_buffer[gps_index] = '\0'; // ensure string is properly terminated
+            */ 
+            
+            parse_gngga((char*)gps_buffer);
+        }
+    }
 
 
     /*
@@ -640,7 +751,7 @@ int main(void) {
     
 
 
-    
+    /*
     //Successful pulsing of PWM using LED
     WDTCTL = WDTPW + WDTHOLD; // Stop Watchdog Timer
     InitCoilPWM();
@@ -658,6 +769,7 @@ int main(void) {
             __delay_cycles(50 * PWM_PERIOD);
 		}
 	}
+    */
     
     
 
