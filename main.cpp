@@ -133,6 +133,47 @@ void SetCoilPWM(uint8_t duty_cycle) {
     }
 }
 
+// InitFanPWM initialises PWM for Port P6.1 (FAN_Coil)
+void InitFanPWM(){
+    // Setup Pins
+    P6DIR  |= BIT1;                             // Set BIT1 of P6DIR to output. 
+
+    P6SEL0 |= BIT1;     // Set BIT 1 of P6SEL0 = 1
+    P6SEL1 &= ~BIT1;    // Set BIT 1 of P6SEL1 = 0
+    //Page 106 --> 01b = select timer Timer_B3.2
+
+    PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO
+
+    // Setup Compare Reg
+    TB3CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
+    TB3CCR2 = 0;                                // 0% duty cycle
+    TB3CCTL2 = OUTMOD_7;                        // Reset/Set PWM mode, refer to YT vid
+    // TB3CCRn is the timer attached to Port P6 from Table 6-68
+
+    // Setup Timer 3.2
+    TB3CTL =    TBCLR       |       TBSSEL_2    | MC_1;
+    //     = Clear Timer_B0 |  Set SMCLK as clk | Up-Mode: Count upwards
+}
+
+// SetFanPWM sets the duty_cyle for the coil.
+void SetFanPWM(uint8_t duty_cycle) {
+    // PWM Fan P6.1 on schematic. 
+    // duty_cyle must be a positive integer between 0 and 100;
+    // SMCLK is used at 1Mhz
+    
+    if (duty_cycle > 100) {
+        duty_cycle = 100;
+    }
+
+    // Update Duty cycle.
+    if (duty_cycle >= 100) {
+        TB3CCR2 = TB3CCR0 + 1; // force always-high
+    } else {
+        TB3CCR2 = (TB3CCR0 * duty_cycle) / 100;     // // Set LOW when TB0CCR1 is reached
+    }
+
+}
+
 // Utilise BOTH sensor's reading of altitude and acceleration to determine current flight state. 
 // Compare value against initial calculated altitude and pressure to determine change. 
 void UpdateFlightState() {
@@ -816,6 +857,12 @@ int main(void) {
 		}
 	}
     */
+
+    
+
+    WDTCTL = WDTPW + WDTHOLD; // Stop Watchdog Timer
+    InitFanPWM();
+    SetFanPWM(100);
     
     
 
