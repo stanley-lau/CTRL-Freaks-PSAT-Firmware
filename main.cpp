@@ -14,6 +14,12 @@
 #include "bmp_buffer.hpp"
 #include "accl.hpp"
 
+
+// LoRa #includes
+#include "LoRa/spi.hpp"
+#include "LoRa/lora.hpp"
+#include "LoRa/gpio.hpp"
+
 // ==== Define Constants ==== //
 // PWM
 #define PWM_PERIOD 500                  // PWM Period
@@ -437,26 +443,6 @@ __interrupt void EUSCI_A0_ISR(void){
     
     P1OUT ^= BIT0;              // Toggle LED for debugging
     char received = UCA0RXBUF;
-
-    /*
-    // ignore NULL bytes
-    if (received == 0){
-        return;
-    } 
-    if (received == '\n') {
-        gps_buffer[gps_index] = '\0';
-        gps_index = 0;
-        gps_line_ready = 1;
-        __bic_SR_register_on_exit(CPUOFF);
-    }
-    else {
-        if (gps_index < GPS_BUFFER_SIZE - 1) {
-            gps_buffer[gps_index++] = received;
-        } else {
-            gps_index = 0;
-        }
-    }
-    */
     
     // Only store printable characters, comma, and newline
     if ((received >= 32 && received <= 126) || received == ',' || received == '\n') {
@@ -557,6 +543,58 @@ void parse_gngga(char *line) {
     __no_operation();
 }
 
+// ==================== LoRa =========================//
+/*
+LoRa code was written with the SPI_B1 moduel in mind. This corresponds to
+UCB1STE = P4.4
+UCB1CLK = P4.5
+UCB1MOSI = P4.6
+UCB1MISO = P4.7
+
+All these pins are broken out on the DEV board which means we can use them temporarily. But, we will need to change them onte CTRL Freaks second revision
+
+*/
+
+#define MESSAGE {1,2}
+
+// This gets passed around a lot, so it gets it's own type
+GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
+
+// LoRa TX function
+void LoRaTX() {
+    uint8_t data[] = MESSAGE;
+    while(1){
+        radio_transmit_start(data, 5, radioChipSelPin); // Look to change payload lenght to 2
+
+        while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
+    }
+}
+
+// Loop until either we received a packet or the Rx operation times out
+RadioRxStatus wait_for_received_packet(uint8_t data_received[], uint16_t* message_length_bytes) {
+    while(1) {
+        RadioRxStatus result = radio_receive_is_complete(data_received, message_length_bytes, radioChipSelPin);
+        if (result == SUCCESSFUL_RX) {
+            return SUCCESSFUL_RX;
+        }
+        if (result == ERR_RX_TIMEOUT_FAIL) {
+            return ERR_RX_TIMEOUT_FAIL;
+        }
+    }
+}
+
+void gpio_init() {
+    // Radio chip select pin
+    *radioChipSelPin.pdir |= radioChipSelPin.pin; // Set as output
+    *radioChipSelPin.pout |= radioChipSelPin.pin; // Set HIGH
+
+    // LEDs: Set P2.0, 2.1, 2.2 to output
+    P2DIR |= (BIT0 | BIT1 | BIT2);
+
+    // Unlock GPIO
+    PM5CTL0 &= ~LOCKLPM5;
+    P2OUT |= (BIT0 | BIT1 | BIT2);
+}
 
 // =======================================
 
@@ -714,7 +752,9 @@ int main(void) {
 
 
     
-    // GPS Testing. Entering interrupts to get NMEA values.  
+    
+    /*
+    // Successful GPS testing: watch LAT LONG. Correct values when fixed. ZERSO otherwise.
     WDTCTL = WDTPW | WDTHOLD;
     InitClock16MHz();
 
@@ -722,25 +762,25 @@ int main(void) {
     P1OUT &= ~BIT0;            // Turn RED LED off
     ClearGPSBuffer();
     InitGPSUART();
-
-	//__bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
     
     while(1){
         __bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
         if (gps_line_ready) {
             gps_line_ready = 0;
 
-            /* Loops through buffer to clear NULL
+            // Loops through buffer to clear NULL
             // --- Add this BEFORE calling parse_gpgga --- sanitise buffer before passing to remove NULL which stops strtok from working
-            for (int i = 0; i < gps_index; i++) {
-                if (gps_buffer[i] == 0) gps_buffer[i] = ',';  // replace nulls with comma
-            }
-            gps_buffer[gps_index] = '\0'; // ensure string is properly terminated
-            */ 
+            // for (int i = 0; i < gps_index; i++) {
+            //     if (gps_buffer[i] == 0) gps_buffer[i] = ',';  // replace nulls with comma
+            // }
+            // gps_buffer[gps_index] = '\0'; // ensure string is properly terminated
             
             parse_gngga((char*)gps_buffer);
         }
     }
+    */
+    
+    
 
 
     /*
@@ -753,7 +793,6 @@ int main(void) {
         RecoveryMode();
     }
     */
-    
     
     
 
@@ -853,5 +892,29 @@ int main(void) {
         battery_temperature = GetBatteryTemp();
         
     }
+    */
+
+    
+    // UNTESTED LoRa Code
+    /*
+    // Stop watchdog timer
+    WDTCTL = WDTPW | WDTHOLD;
+
+    gpio_init();
+    spi_B1_init();
+
+    lora_configure(
+            BANDWIDTH62_5K,
+            CODINGRATE4_5,
+            CRC_DISABLE,
+            EXPLICIT_HEADER_MODE,
+            POLARITY_NORMAL_MODE,
+            PREAMBLE_LENGTH,
+            SPREADINGFACTOR1024,
+            SYNC_WORD_RESET,
+            radioChipSelPin
+    );
+    
+    LoRaTX();
     */
 } 
