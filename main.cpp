@@ -84,13 +84,7 @@ __interrupt void ADC_ISR(void) {
     }
 }
 
-// ==== FlightStates ==== // 
-enum FlightState {PREFLIGHT, FLIGHT, LANDED, SHUTDOWN };
-enum FlightState current_flight_state = PREFLIGHT;
-enum FlightState prev_flight_state;
-
-float ground_pressure = 0.0f;
-float initial_altitude = 0.0f;
+// ================= PWM =================
 
 // InitCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
@@ -133,6 +127,20 @@ void SetCoilPWM(uint8_t duty_cycle) {
     }
 }
 
+// This function turns on the voltage regulator 
+void TurnOnRegulator() {
+    // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
+    P3SEL0 &= ~BIT5;  
+    P3SEL1 &= ~BIT5;
+
+    // REG_EN as output
+    P3DIR |= BIT5;
+
+    // Enable voltage regulator
+    P3OUT |= BIT5;
+}
+
+
 // InitFanPWM initialises PWM for Port P6.1 (FAN_Coil)
 void InitFanPWM(){
     // Setup Pins
@@ -173,6 +181,149 @@ void SetFanPWM(uint8_t duty_cycle) {
     }
 
 }
+
+
+// ======================== MOCK UPDATEFLIGHTSTATE ==========================
+
+// ==== FlightStates ==== // 
+enum FlightState {PREFLIGHT, FLIGHT, LANDED, SHUTDOWN };
+enum FlightState current_flight_state = PREFLIGHT;
+enum FlightState prev_flight_state;
+
+float ground_pressure = 0.0f;
+float initial_altitude = 0.0f;
+
+// NORMALLY -> put the following 2 lines in main 
+//ground_pressure = CalibrateGroundPressure(100);
+//initial_altitude = pressureToAltitude(float ground_pressure); 
+
+//For the mock purpose, will keep both value at 0. 
+
+#define BUFFER_SIZE 16
+
+float MockAcceleration[BUFFER_SIZE] = {
+    0.0f, 1.0f, 5.0f, 7.0f, 
+    9.0f, 10.0f, 5.0f, 0.0f,
+    0.0f, 5.0f, 10.0f, 9.0f, 
+    7.0f, 5.0f, 1.0f, 0.0f
+};
+
+static volatile uint8_t MockAccelIndex = 0;
+float ReadACCLMock(void)
+{
+    float accel = MockAcceleration[MockAccelIndex];
+    MockAccelIndex = (MockAccelIndex + 1) % BUFFER_SIZE;
+    return accel;
+}
+
+static const uint32_t MockPressure[BUFFER_SIZE] = {
+    // Ground
+    101325, 101325,
+    
+    // Launch
+    101200, 100500, 99500, 98500, 
+    
+    // Apogee
+    98000, 98000,  
+    
+    // Descent
+    98500, 99500, 100500, 101000, 101300,
+    
+    // Landed
+    101325, 101325, 101325
+};
+
+
+float AltBuffer[BUFFER_SIZE];
+static volatile uint8_t AltBufferIndex = 0;
+static uint8_t AltSamples = 0;
+void PushToAltitudeBuffer(float altitude_value) {
+    AltBuffer[AltBufferIndex] = altitude_value;
+    AltBufferIndex = (AltBufferIndex + 1) % BUFFER_SIZE;
+
+    // Count the number of samples that have been collected
+    if (AltSamples < BUFFER_SIZE) {
+        AltSamples++;
+    }
+}
+
+static uint8_t MockPressureIndex = 0;
+void UpdateBMPMock(void) {
+    volatile uint32_t pressure = MockPressure[MockPressureIndex];    
+    volatile float altitude = PressureToAltitude(pressure); 
+    PushToAltitudeBuffer(altitude);
+    MockPressureIndex = (MockPressureIndex + 1) % BUFFER_SIZE;
+}
+
+bool GetAltitudeDelta(float *delta) {
+    if (AltSamples < BUFFER_SIZE) return false;
+
+    uint8_t newest = (AltBufferIndex + BUFFER_SIZE - 1) % BUFFER_SIZE;
+    uint8_t oldest = AltBufferIndex;
+
+    *delta = AltBuffer[newest] - AltBuffer[oldest];
+    return true;
+}
+
+float OverallAltitudeChange = 0.0f;
+void OverallAltitudeDelta(float *OverallAltitudeChange) {
+    uint8_t newest = (AltBufferIndex + BUFFER_SIZE - 1) % BUFFER_SIZE;
+    uint8_t oldest = AltBufferIndex;
+
+    *OverallAltitudeChange = AltBuffer[newest] - initial_altitude;
+}
+
+void UpdateFlightStateMock() {
+    float delta;
+   
+    // Function won't run if not enough data (less than 16 samples) have been collected
+    // Need to check this? How often are samples collected?
+    if (!GetAltitudeDelta(&delta)) {
+        return; 
+    }
+    delta = (fabsf(delta));
+
+    float accl_magnitude = ReadACCLMock();
+    
+    OverallAltitudeDelta(&OverallAltitudeChange);
+    OverallAltitudeChange = (fabsf(OverallAltitudeChange));
+
+    switch (current_flight_state) {
+        
+        case PREFLIGHT:
+            if (delta > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
+                prev_flight_state = PREFLIGHT;
+                current_flight_state = FLIGHT;
+            }
+            break;
+            
+        case FLIGHT:
+            if (delta < ALTITUDE_THRESHOLD && OverallAltitudeChange < ALTITUDE_THRESHOLD && accl_magnitude < ACCL_THRESHOLD) {
+                prev_flight_state = FLIGHT;
+                current_flight_state = LANDED;
+            }
+            break;
+
+        case LANDED:
+            break;
+            
+        case SHUTDOWN:
+            break;
+    }
+}
+
+int main (void) {
+    WDTCTL = WDTPW | WDTHOLD; 
+    
+    while (1) {
+        UpdateBMPMock();
+        UpdateFlightStateMock(); }
+}
+
+
+// END MOCK UPDATEFLIGHTSTATE
+
+
 
 // Utilise BOTH sensor's reading of altitude and acceleration to determine current flight state. 
 // Compare value against initial calculated altitude and pressure to determine change. 
@@ -639,6 +790,12 @@ void gpio_init() {
 
 // =======================================
 
+
+
+
+
+// =======================================
+
 void RecoveryMode(void) {
     uint8_t duty_cycle = 0;
     bool pwm_enabled = false;
@@ -648,6 +805,7 @@ void RecoveryMode(void) {
     DisableACCL();
 
     InitCoilPWM(); 
+    InitFanPWM();
 
     Timer3_init_1s_tick();
     __enable_interrupt();
@@ -669,6 +827,8 @@ void RecoveryMode(void) {
                 pwm_enabled = true;
                 duty_cycle = 100;
                 SetCoilPWM(duty_cycle);
+                TurnOnRegulator();
+                SetFanPWM(duty_cycle);
 
                 start_delay_seconds(15);
             }
@@ -682,7 +842,9 @@ void RecoveryMode(void) {
                 // Safety checks
                 if (CurrExceedsThreshold() || BatExceedsThreshold() || ChamExceedsThreshold()) {
                     duty_cycle = 0;
-                    SetCoilPWM(duty_cycle); }
+                    SetCoilPWM(duty_cycle); 
+                    SetFanPWM(duty_cycle);
+                }
             }
 
             timer_expired = 0;
@@ -690,6 +852,7 @@ void RecoveryMode(void) {
             // Finish stage 2. After 15 seconds has passed, turn off PWM. 
             pwm_enabled = false;
             SetCoilPWM(0);
+            SetFanPWM(0);
 
             // Start cooldown
             start_delay_seconds(45);
@@ -700,6 +863,7 @@ void RecoveryMode(void) {
         {
             // 45 second cooldown. Allow wick to resaturate. 
             SetCoilPWM(0);
+            SetFanPWM(0);
 
             // Other background tasks here
 
@@ -711,8 +875,10 @@ void RecoveryMode(void) {
                 pwm_enabled = true;
                 duty_cycle = 100;
                 SetCoilPWM(duty_cycle);
+                TurnOnRegulator();
+                SetFanPWM(duty_cycle);
 
-                start_delay_seconds(10);
+                start_delay_seconds(15);
             }
         }
     }
@@ -720,7 +886,7 @@ void RecoveryMode(void) {
 
 // =======================================
 
-int main(void) {
+//int main(void) {
     // bool recovery_active = false;
 
     // // LoRa
@@ -859,11 +1025,11 @@ int main(void) {
     */
 
     
-
+    /*
     WDTCTL = WDTPW + WDTHOLD; // Stop Watchdog Timer
     InitFanPWM();
     SetFanPWM(100);
-    
+    */
     
 
 
@@ -964,4 +1130,4 @@ int main(void) {
     
     LoRaTX();
     */
-} 
+//} 
