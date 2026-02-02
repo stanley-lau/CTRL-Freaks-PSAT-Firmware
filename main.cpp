@@ -1397,10 +1397,11 @@ All these pins are broken out on the DEV board which means we can use them tempo
 
 */
 
-#define MESSAGE {1,2,3,4,5}
+#define MESSAGE {'H','e','l','l','o'}
 #define PREAMBLE_LENGTH 8
+#define TIMEOUT_IN_SYMBOLS 1023 //max timeout
 
-// This gets passed around a lot, so it gets it's own type
+// Chip Select pin
 GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
 
 // LoRa TX function
@@ -1410,7 +1411,6 @@ void LoRaTX() {
         radio_transmit_start(data, 5, radioChipSelPin);
 
         while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
-        __delay_cycles(8000000); // 1 second delay at 8MHz
     }
 }
 
@@ -1433,11 +1433,26 @@ void gpio_init() {
     *radioChipSelPin.pout |= radioChipSelPin.pin; // Set HIGH
 
     // LEDs: Set P2.0, 2.1, 2.2 to output
-    //P2DIR |= (BIT0 | BIT1 | BIT2);
+    P2DIR |= (BIT0 | BIT1 | BIT2);
 
     // Unlock GPIO
     PM5CTL0 &= ~LOCKLPM5;
-    //P2OUT |= (BIT0 | BIT1 | BIT2);
+    P2OUT |= (BIT0 | BIT1 | BIT2);
+}
+
+void flash_led_red(void){
+    P2OUT ^= BIT0; // Toggle P2.0
+    __delay_cycles(50000);
+}
+
+void flash_led_yellow_blue(void){
+    P2OUT ^= BIT1; // Toggle P2.1
+    __delay_cycles(50000);
+}
+
+void flash_led_green(void){
+    P2OUT ^= BIT2; // Toggle P2.2
+    __delay_cycles(50000);
 }
 
 // =======================================
@@ -1648,6 +1663,7 @@ int main(void) {
     
     
     
+    
 
 
     /*
@@ -1768,7 +1784,7 @@ int main(void) {
     */
 
     
-    // UNTESTED LoRa Code
+    // LoRa Code
     // Stop watchdog timer
     WDTCTL = WDTPW | WDTHOLD;
 
@@ -1787,7 +1803,5 @@ int main(void) {
             radioChipSelPin
     );
     
-    LoRaTX();
-    
-    
+    LoRaTX(); 
 } 
