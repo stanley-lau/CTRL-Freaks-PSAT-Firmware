@@ -389,6 +389,551 @@ void UpdateFlightStateDemo(float delta, float accl_magnitude) {
     }
 }
 
+/* ------------------------------BAROMETER---------------------------*/
+
+#include "hal/blocking_i2c.hpp"
+
+// I2C Temporary Pin Mappings for V2.1 reference board for BMP and ACCL
+Pin<P1,3> scl;
+Pin<P1,2> sda;
+I2cMaster<I2C_B0> i2c;
+
+// Slave addresses
+static const uint8_t BMP_ADDR  = 0x76; 
+// Address is 0x68 if AP_AD0 is Low
+static const uint8_t ACCL_ADDR = 0x68; 
+
+// This function write a single byte to register
+void I2CWriteRegister(uint8_t devAddr, uint8_t reg, uint8_t val) {
+    uint8_t data[2] = {reg, val};
+    i2c.write(devAddr, data, 2);
+}
+
+// This function read a single byte from register
+uint8_t I2CReadRegister(uint8_t devAddr, uint8_t reg) {
+    uint8_t val;
+    int16_t result;
+
+    // Write the register address, then read 1 byte
+    result = i2c.write_read(devAddr, &reg, 1, &val, 1);
+    if (result != -1) {
+        // Error occurred during I2C transaction
+        return 0; // or some error code
+    }
+
+    return val;
+}
+
+
+void InitSensors() {
+    sda.function(PinFunction::Primary);
+    scl.function(PinFunction::Primary);
+
+    gpioUnlock();
+
+    // Initialise I2C (100kHz)
+    i2c.init(I2cClockSource::Smclk, 10);
+
+    // Power-up Delay
+    //__delay_cycles(2000);
+}
+
+// Calibration Functions
+struct BMP390Calib {
+    double par_t1, par_t2, par_t3;
+    double par_p1, par_p2, par_p3, par_p4, par_p5, par_p6, par_p7, par_p8, par_p9, par_p10, par_p11;
+    double t_lin; // intermediate temperature used for pressure compensation
+};
+
+BMP390Calib bmp_calib;
+
+void ConvertBMP390Calibration(const uint8_t *c) {
+    bmp_calib.par_t1 = (double)((uint16_t)c[1] << 8 | c[0]) / 0.00390625; 
+    bmp_calib.par_t2 = (double)((int16_t)c[3] << 8 | c[2]) / 1073741824.0; // 2^30
+    bmp_calib.par_t3 = (double)((int8_t)c[4]) / 281474976710656.0;        // 2^48
+
+    bmp_calib.par_p1 = ((double)((int16_t)c[6] << 8 | c[5]) - 16384.0) / 1048576.0;
+    bmp_calib.par_p2 = ((double)((int16_t)c[8] << 8 | c[7]) - 16384.0) / 536870912.0;
+    bmp_calib.par_p3 = (double)((int8_t)c[9])  / 4294967296.0;           // 2^32
+    bmp_calib.par_p4 = (double)((int8_t)c[10]) / 137438953472.0;         // 2^37
+    bmp_calib.par_p5 = (double)((uint16_t)c[12] << 8 | c[11]) / 0.125 ; 
+    bmp_calib.par_p6 = (double)((uint16_t)c[14] << 8 | c[13]) / 64.0;
+    bmp_calib.par_p7 = (double)((int8_t)c[15]) / 256.0;
+    bmp_calib.par_p8 = (double)((int8_t)c[16]) / 32768.0;
+    bmp_calib.par_p9 = (double)((int16_t)c[18] << 8 | c[17]) / 281474976710656.0; // 2^48
+    bmp_calib.par_p10 = (double)((int8_t)c[19]) / 281474976710656.0;              // 2^48
+    bmp_calib.par_p11 = (double)((int8_t)c[20]) / 36893488147419103232.0;         // 2^65
+}
+
+// --- Read and set calibration ---
+void ReadBMP390Calibration(void) {
+    uint8_t calib[21];
+    uint8_t calibStart = 0x31;
+    int16_t result = i2c.write_read(BMP_ADDR, &calibStart, 1, calib, 21);
+    if (result != -1) return; // error
+    ConvertBMP390Calibration(calib);
+}
+
+volatile bool pressure_data_ready_i2c = false;
+
+void ConfigureBMPI2C() {
+    ReadBMP390Calibration();
+
+    // "INT_CTRL" register 
+    I2CWriteRegister(BMP_ADDR, 0x19, 0x76); // push-pull, active_high, latching
+    
+    // "IF_CONF" register
+    I2CWriteRegister(BMP_ADDR, 0x1A, 0x00); // Watchdog disabled for I2C  
+
+    // "PWR_CTRL" register 
+    I2CWriteRegister(BMP_ADDR, 0x1B, 0x33); // Pressure on, Temperature on, Normal Mode
+
+    // "OSR" register (0x1C)
+    I2CWriteRegister(BMP_ADDR, 0x1C, 0x03); // 8x oversampling pressure
+
+    // "ODR" register (0x1D)
+    I2CWriteRegister(BMP_ADDR, 0x1D, 0x02); // 20ms sampling period
+
+    // "CONFIG" register (0x1F) 
+    // May consider adding IIR Filter 
+    //I2CWriteRegister(BMP_ADDR, 0x1F, (1 << 3)); // Bit 1 = 1 --> IIR filter coefficient is set to 1. 
+
+    //__delay_cycles(10000);
+}
+
+// Read register to determine if new pressure data is ready 
+void UpdateBMPStatusI2C () {
+    uint8_t status;
+
+    // "STATUS" register 
+    status = I2CReadRegister(BMP_ADDR, 0x03); 
+
+    // Checking if pressure sensor data is ready 
+    if (status & (1 << 5)) {
+        pressure_data_ready_i2c = true;
+    }
+}
+
+uint32_t ReadRawPressureI2C() {
+    uint8_t buf[3];
+    uint8_t startReg = 0x04; // pressure register start
+    int16_t result;
+
+    // Write register address, then read 3 bytes
+    result = i2c.write_read(BMP_ADDR, &startReg, 1, buf, 3);
+    // -1 is returned if successful. Otherwise, error has occured. 
+    if (result != -1) {
+        return 0; // Indicate error has occurred
+    }
+
+    return ((uint32_t)buf[2] << 16) | ((uint32_t)buf[1] << 8) | buf[0]; 
+}
+
+uint32_t ReadRawTemperatureI2C() {
+    uint8_t buf[3];
+    uint8_t startReg = 0x07; // temperature register start
+    int16_t result;
+
+    // Write register address, then read 3 bytes
+    result = i2c.write_read(BMP_ADDR, &startReg, 1, buf, 3);
+    // Returns -1 if no NACKs were received (successful), otherwise (failure) returns the byte number from which the NACK was received.
+    if (result != -1) {
+        return 0; 
+    }
+
+    return ((uint32_t)buf[2] << 16) | ((uint32_t)buf[1] << 8) | buf[0]; 
+}
+
+// Compensation
+double CompensateTemperature(uint32_t raw_temp) {
+    double partial1 = (double)raw_temp - bmp_calib.par_t1;
+    double partial2 = partial1 * bmp_calib.par_t2;
+    bmp_calib.t_lin = partial2 + partial1 * partial1 * bmp_calib.par_t3;
+    return bmp_calib.t_lin;
+}
+
+double CompensatePressure(uint32_t raw_pressure) {
+    double t_linear = bmp_calib.t_lin;
+
+    // Step 1: Offset compensation
+    double partial1 = bmp_calib.par_p6 * t_linear;
+    double partial2 = bmp_calib.par_p7 * t_linear * t_linear;
+    double partial3 = bmp_calib.par_p8 * t_linear * t_linear * t_linear;
+    double offset = bmp_calib.par_p5 + partial1 + partial2 + partial3;
+
+    // Step 2: Sensitivity compensation
+    partial1 = bmp_calib.par_p2 * t_linear;
+    partial2 = bmp_calib.par_p3 * t_linear * t_linear;
+    partial3 = bmp_calib.par_p4 * t_linear * t_linear * t_linear;
+    double sensitivity = bmp_calib.par_p1 + partial1 + partial2 + partial3;
+
+    double compensated_pressure = sensitivity * (double)raw_pressure + offset;
+
+    // Step 3: Second-order correction
+    double raw2 = (double)raw_pressure * (double)raw_pressure;
+    compensated_pressure += raw2 * (bmp_calib.par_p9 + bmp_calib.par_p10 * t_linear);
+    compensated_pressure += raw2 * (double)raw_pressure * bmp_calib.par_p11;
+
+    return compensated_pressure;
+}
+
+// Get raw pressure, then performs calibration and compensation on it to return current pressure (Pascals)
+float GetPressureI2C() {
+    volatile uint32_t raw_pressure = ReadRawPressureI2C();
+    volatile uint32_t raw_temperature = ReadRawTemperatureI2C();
+
+    CompensateTemperature(raw_temperature);
+    volatile double pressure_pa = CompensatePressure(raw_pressure);
+    return (float)pressure_pa; 
+}
+
+// Turns off the temperature and pressure sensor. Enter sleep mode. 
+void DisableBMPI2C() {
+    // "PWR_CTRL" register
+    I2CWriteRegister(BMP_ADDR, 0x1B, 0x70);  // Sleep mode: disable the temperature and pressure sensor 
+}
+
+// CalibrateGroundPressureI2C takes X samples, calculates the average pressure, and returns the result
+float CalibrateGroundPressureI2C(uint16_t samples) {
+    float sum = 0.0f;
+    uint16_t collected = 0;
+
+    // Rereads the status register and refreshes data every time 
+    while (collected < samples) {
+        UpdateBMPStatusI2C();
+
+        if (pressure_data_ready_i2c) {
+            sum += (float)GetPressureI2C();
+            collected++;
+            pressure_data_ready_i2c = false;  //Reset pressure_data_ready back to false after reading data.
+        }
+    }
+
+    return (sum / samples);  // Return average pressure [Pa] of 100 samples 
+}
+
+float PressureToAltitudeI2C(float pressure) {
+    float altitude = h_b + (T_b / L_b) * (powf(pressure / P_b, (-R * L_b) / (g_0 * M)) - 1);
+    return altitude;
+}
+
+float ground_pressure_i2c; 
+float initial_altitude_i2c; 
+// Initial set up for BMP, and then calculate ground pressure and initial altitude. 
+void SetUpBMPI2C (float *ground_pressure_i2c, float *initial_altitude_i2c) {
+    // Initialise MCU pins for BMP SPI
+    InitSensors();
+    
+    // Configure BMP's internal registers.
+    ConfigureBMPI2C();
+
+    // Polling approaching is okay during pre-flight phase. Poll until Pressure_data_ready is true.
+    do {
+        UpdateBMPStatusI2C();
+    } while (!pressure_data_ready_i2c);
+
+    // Reset flag after loop exits.
+    pressure_data_ready_i2c = false;
+
+    // Calibrate current pressure at ground using 100 samples 
+    *ground_pressure_i2c = CalibrateGroundPressureI2C(100); 
+    *initial_altitude_i2c = PressureToAltitudeI2C(*ground_pressure_i2c);
+}
+
+/* ============== Start implementing pressure data into UpdateFlightStateLogic*/
+
+float PressureBuffer[BUFFER_SIZE];
+float AltitudeBuffer[BUFFER_SIZE];
+
+// Indexing and tracking
+static volatile uint8_t PressureBufferIndex = 0;
+static volatile uint8_t AltitudeBufferIndex = 0;
+static uint8_t TotalSamplesCollected = 0;
+
+void PushToPressureBuffer(float pressure_value) {
+    PressureBuffer[PressureBufferIndex] = pressure_value;
+    PressureBufferIndex = (PressureBufferIndex + 1) % BUFFER_SIZE;
+}
+
+void PushToAltitudeBufferI2C(float altitude_value) {
+    AltitudeBuffer[AltitudeBufferIndex] = altitude_value;
+    AltitudeBufferIndex = (AltitudeBufferIndex + 1) % BUFFER_SIZE;
+    
+    // Track total samples for threshold checks
+    if (TotalSamplesCollected < BUFFER_SIZE) {
+        TotalSamplesCollected++;
+    }
+}
+
+void ProcessBMPDataI2C () {
+    // Check if the BMP390 has new data ready
+    UpdateBMPStatusI2C(); 
+
+    if (pressure_data_ready_i2c) {
+        float pressure = GetPressureI2C();
+        
+        // 3. Store in the pressure circular array
+        PushToPressureBuffer(pressure);
+        
+        float current_alt = PressureToAltitudeI2C(pressure);
+        
+        // Store in the altitude circular array
+        PushToAltitudeBufferI2C(current_alt);
+
+        // Reset the flag for the next cycle
+        pressure_data_ready_i2c = false;
+    }
+}
+
+bool GetAltitudeDeltaI2C(float *delta_i2c) {
+    if (TotalSamplesCollected < BUFFER_SIZE) return false;
+
+    uint8_t newest = (AltitudeBufferIndex + BUFFER_SIZE - 1) % BUFFER_SIZE;
+    uint8_t oldest = AltitudeBufferIndex;
+
+    *delta_i2c = AltitudeBuffer[newest] - AltitudeBuffer[oldest];
+    return true;
+}
+
+float OverallAltitudeChangeI2C = 0.0f;
+void OverallAltitudeDeltaI2C(float *OverallAltitudeChange) {
+    uint8_t newest = (AltitudeBufferIndex + BUFFER_SIZE - 1) % BUFFER_SIZE;
+    uint8_t oldest = AltitudeBufferIndex;
+
+    *OverallAltitudeChange = AltitudeBuffer[newest] - initial_altitude_i2c;
+}
+
+// ============================== ACCL ============================== 
+
+void ConfigureACCLI2C() {
+    //PWR_MGMT0 register
+    I2CWriteRegister(ACCL_ADDR, 0x1F, (1 << 0) | (1 << 1)); // Make 0, 1 = 1 --> Places accelerometer in Low Noise (LN) Mode
+    // __delay_cycles(500);                  // Small safety delay
+
+    //INT_CONFIG register
+    I2CWriteRegister(ACCL_ADDR, 0x06, 0x3F);  // = 0011 1111 = INT1: active high, push-pull, latched, INT2: active high, push-pull, latched
+    //__delay_cycles(500);               
+
+    //INT_SOURCE0 register
+    I2CWriteRegister(ACCL_ADDR, 0x2B, (1 << 3));       // Make bit 3 = 1 --> Data ready interrupt routed to INT1
+    //__delay_cycles(500);          
+
+    //WOM_CONFIG register
+    I2CWriteRegister(ACCL_ADDR, 0x27, (1 << 0));       // Make bit 0 = 1 --> Wake On Motion (WOM) enabled 
+    //__delay_cycles(500);   
+
+    //INT_SOURCE4 register
+    I2CWriteRegister(ACCL_ADDR, 0x2E, (1 << 0) | (1 << 1) | (1 << 2));       // Make bit 0, 1, 2 = 1 --> X, Y, Z axis WOM routed to INT2
+    //__delay_cycles(500);
+
+    //INT_CONFIG0 register
+    I2CWriteRegister(ACCL_ADDR, 0x04, (1 << 5) | (0 << 4));       // Make bit 5 = 1, bit 4 = 0 --> Data ready interrupt cleared on sensor register read
+    //__delay_cycles(500);
+
+    //ACCEL_CONFIG0 register
+    I2CWriteRegister(ACCL_ADDR, 0x21, (0 << 5) | (0 << 6));       // Make bit 5 and 6 = 0 --> Accelerometer output = ±16g full-scale
+    //__delay_cycles(500);
+}
+
+bool accl_data_ready_i2c = false;
+void UpdateACCLStatusI2C() {
+    uint8_t int_status;
+
+    // "INT_STATUS_DRDYS" register 
+    int_status = I2CReadRegister(ACCL_ADDR, 0x39); 
+
+    // Checking for data ready interrupt in the INT_STATUS register
+    if (int_status & (1 << 0)) {      // Bit 0 is automatically sets to 1 when a Data Ready interrupt is generated
+        accl_data_ready_i2c = true;               // Data is ready. After register has been read, bit 0 is set to 0. 
+    }
+}
+
+float ReadACCLI2C() {
+    uint8_t buf[6];
+    // Raw acceleration data read in the x, y, and z axis. 
+    int16_t ax_raw, ay_raw, az_raw;
+    float ax, ay, az;
+
+    // Start at the first register (0x0B) and read 6 bytes in one go. 
+    // Internal register is locked and ensure data is consistent. 
+    int16_t result = i2c.write_read(ACCL_ADDR, (uint8_t[]){0x0B}, 1, buf, 6);
+    
+    if (result != -1) return 0.0f; // Handle I2C error
+
+    // Data is stored as buf[0]=x-high, buf[1]=x-low, buf[2]=yh, buf[3]=yl, buf[4]=zh, buf[5]=zl
+    ax_raw = (int16_t)((buf[0] << 8) | buf[1]);
+    ay_raw = (int16_t)((buf[2] << 8) | buf[3]);
+    az_raw = (int16_t)((buf[4] << 8) | buf[5]);
+
+    // Convert to g using ±16g full-scale
+    ax = ax_raw / 2048.0f;
+    ay = ay_raw / 2048.0f;
+    az = az_raw / 2048.0f;
+
+    // Magnitude of acceleration vector
+    return sqrtf(ax*ax + ay*ay + az*az);
+}
+
+void DisableACCLI2C() {
+    //PWR_MGMT0 register
+    I2CWriteRegister(ACCL_ADDR, 0x1F, 0x00); // Turns accelerometer and gyroscope off
+}
+// ============================= ACCL - LSM6DSOX ==================
+
+static const uint8_t LSM_ADDR = 0x6A; 
+
+void ConfigureLSMI2C() {
+
+    // INT1_CTRL (0Dh)
+    I2CWriteRegister(LSM_ADDR, 0x0D, (1 << 0)); // Route accelerometer data-ready interrupt to the INT1 pin
+
+    // Maybe block data update also important?
+    // CTRL3_C (12h)
+    I2CWriteRegister(LSM_ADDR, 0x12, 0x44); // Active High, Push-Pull, Address Increment enabled
+
+    // CTRL8_XL (17h)
+    I2CWriteRegister(LSM_ADDR, 0x17, (0 << 1)); // old full-scale mode
+
+    //Accelerometer control register - CTRL1_XL
+    I2CWriteRegister(LSM_ADDR, 0x10, 0xA6); // 1010 0100 = 6.66kHz + ±16g full-scale + first stage digital filtering         
+}
+
+bool lsm_data_ready_i2c = false;
+void UpdateLSMStatusI2C() {
+    uint8_t status;
+
+    // "STATUS_REG" 
+    status = I2CReadRegister(LSM_ADDR, 0x1E); 
+
+    // Bit 0 (XLDA) is set to 1 when a new Accel sample is ready
+    if (status & (1 << 0)) {
+        lsm_data_ready_i2c = true;
+    }
+}
+
+float ReadLSMI2C() {
+    uint8_t buf[6];
+    int16_t ax_raw, ay_raw, az_raw;
+    uint8_t startReg = 0x28; // Standard output registers (OUTX_L_A)
+
+    // Single I2C transaction to get all axes (Atomic Read)
+    int16_t result = i2c.write_read(LSM_ADDR, &startReg, 1, buf, 6);
+    
+    // Check if I2C transaction failed
+    if (result != -1) return 0.0f; 
+
+    // LSM6DSOX is Little-Endian: buf[0] is Low, buf[1] is High
+    ax_raw = (int16_t)((buf[1] << 8) | buf[0]);
+    ay_raw = (int16_t)((buf[3] << 8) | buf[2]);
+    az_raw = (int16_t)((buf[5] << 8) | buf[4]);
+
+    // Scaling for +/- 16g (0.488 mg per LSB)
+    // 0.488mg = 0.000488g
+    volatile float ax = ax_raw * 0.000488f;
+    volatile float ay = ay_raw * 0.000488f;
+    volatile float az = az_raw * 0.000488f;
+
+    // Magnitude of acceleration vector (Result is in G's)
+    volatile float magnitude_g = sqrtf(ax*ax + ay*ay + az*az);
+
+    // Convert to m/s^2 
+    volatile float magnitude_ms2 = magnitude_g * 9.80665f;
+
+    // Subtract Bias (Gravity) and apply Deadband
+    // This removes the 9.8 m/s^2 constant and any sensor offset
+    volatile float linear_accel = fabsf(magnitude_ms2 - 9.80665f);
+
+    // Deadband: If result is small (noise), acceleration is 0.0
+    if (linear_accel < 0.4f) {
+        return 0.0f;
+    }
+
+    return linear_accel;
+}
+
+/*
+// Main to test just the LSM accelerometer
+int main (void) {
+    InitSensors(); 
+    ConfigureLSMI2C(); 
+
+    volatile float acceleration; 
+
+    while (1) {
+        UpdateLSMStatusI2C();
+
+        if (lsm_data_ready_i2c) {
+            acceleration = ReadLSMI2C(); 
+            lsm_data_ready_i2c = false;
+        }
+    }
+}
+*/
+
+
+//===================== Combining ACCL and BMP data. Used to update flight state ====
+
+void UpdateFlightStateI2C() {
+    float delta_i2c;
+   
+    // Function won't run if not enough data (less than 16 samples) have been collected
+    if (!GetAltitudeDeltaI2C(&delta_i2c)) {
+        return; 
+    }
+    delta_i2c = (fabsf(delta_i2c));
+    
+    UpdateLSMStatusI2C();
+
+    if (!lsm_data_ready_i2c) {
+        return;
+    }
+
+    float accl_magnitude = ReadLSMI2C();
+    
+    OverallAltitudeDeltaI2C(&OverallAltitudeChangeI2C);
+    OverallAltitudeChangeI2C = (fabsf(OverallAltitudeChangeI2C));
+
+    switch (current_flight_state) {
+        
+        case PREFLIGHT:
+            if (delta_i2c > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
+                prev_flight_state = PREFLIGHT;
+                current_flight_state = FLIGHT;
+            }
+            break;
+            
+        case FLIGHT:
+            if (delta_i2c < ALTITUDE_THRESHOLD && OverallAltitudeChange < ALTITUDE_THRESHOLD && accl_magnitude < ACCL_THRESHOLD) {
+                prev_flight_state = FLIGHT;
+                current_flight_state = LANDED;
+            }
+            break;
+
+        case LANDED:
+            break;
+            
+        case SHUTDOWN:
+            break;
+    }
+}
+
+/*
+// Main function. Reading pressure data in Pascals from BMP then using it in UpdateFlightState. 
+int main(void) {
+    volatile float pressure;
+    WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. 
+
+    SetUpBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c); 
+    //ConfigureLSMI2C();
+
+    while (1) {
+        ProcessBMPDataI2C(); 
+        UpdateFlightStateI2C();
+    }
+}
+*/
+
+
 /* -------------------------------ADC------------------------------- */
 
 // Initialise ADC for use. 
