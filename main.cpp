@@ -312,13 +312,13 @@ void UpdateFlightStateMock() {
     }
 }
 
-int main (void) {
-    WDTCTL = WDTPW | WDTHOLD; 
+// int main (void) {
+//     WDTCTL = WDTPW | WDTHOLD; 
     
-    while (1) {
-        UpdateBMPMock();
-        UpdateFlightStateMock(); }
-}
+//     while (1) {
+//         UpdateBMPMock();
+//         UpdateFlightStateMock(); }
+// }
 
 
 // END MOCK UPDATEFLIGHTSTATE
@@ -612,21 +612,29 @@ void InitGPSUART(){
     // Select SMCLK as clock source
     UCA0CTLW0 |= UCSSEL__SMCLK;
 
-    // // Baud rate: 16MHz / 9600
-    // UCA0BRW = 104;                      
-    // UCA0MCTLW = UCOS16 | UCBRF_2 | 0x4900;
+    // 9600 baud, SMCLK = 16 MHz, oversampling
+    // UCA0BRW = 104;                       // 16 MHz / 9600 / 16
+    // UCA0MCTLW = UCOS16 | (2 << 4) | 0xD600; // Oversampling, UCBRF=2, UCBRS=0xD6
 
-    // Baud rate 115200, SMCLK = 16MHz, oversampling
-    UCA0BRW = 8;                   // Integer part
-    UCA0MCTLW = UCOS16 | (11 << 4) | 0xD600; // UCBRFx = 11, UCBRSx = 0xD6
+    // // Baud rate 115200, SMCLK = 16MHz, oversampling (FOR PDR GPS)
+    // UCA0BRW = 8;                   // Integer part
+    // UCA0MCTLW = UCOS16 | (11 << 4) | 0xD600; // UCBRFx = 11, UCBRSx = 0xD6
+
+
+    // Aidens code
+    // SET_BIT(UCA0MCTLW, (UCOS16_1 << 0), (UCOS16_1 << 0));
+    // SET_BIT(UCA0BRW, (0xffff), 8);
+    // SET_BIT(UCA0MCTLW, (0b1111 << 4), (10 << 4));
+    // SET_BIT(UCA0MCTLW, (0xff << 8), (0xf7 << 8));
+
+    // // 115200 baud @ 16MHz (working 115200 baud for beacon)
+    UCA0BRW   = 8;
+    UCA0MCTLW = UCOS16 | (10 << 4) | (0xF7 << 8);
     
-    // Release eUSCI from reset
-    UCA0CTLW0 &= ~UCSWRST;
-
-    PM5CTL0 &= ~LOCKLPM5; // Unlock GPIO
-
-    // Enable RX interrupt before releasing reset
-    UCA0IE |= UCRXIE;
+    // CRITICAL: Release UART from reset, enable interrupt, and unlock GPIO
+    UCA0CTLW0 &= ~UCSWRST;                  // Release eUSCI from reset
+    PM5CTL0 &= ~LOCKLPM5;                   // Unlock GPIO
+    UCA0IE |= UCRXIE;                       // Enable RX interrupt
 }
 
 // UART ISR
@@ -636,6 +644,8 @@ __interrupt void EUSCI_A0_ISR(void){
     P1OUT ^= BIT0;              // Toggle LED for debugging
     char received = UCA0RXBUF;
     
+    
+    // GPS MODULE WORKING
     // Only store printable characters, comma, and newline
     if ((received >= 32 && received <= 126) || received == ',' || received == '\n') {
         if (gps_index < GPS_BUFFER_SIZE - 1) {
@@ -653,14 +663,108 @@ __interrupt void EUSCI_A0_ISR(void){
         __bic_SR_register_on_exit(CPUOFF);
     }
     
+    
+    /*
+    // Store Everything TESTING for Beacon:
+    gps_buffer[gps_index++] = received;
+    if (gps_index >= GPS_BUFFER_SIZE) {
+        gps_index = 0;
+    }
+
+    if (received == '\n') {
+        gps_buffer[gps_index] = '\0';
+        gps_index = 0;
+        gps_line_ready = 1;
+        __bic_SR_register_on_exit(CPUOFF);
+    }
+    */
+    
 }
 
 void InitClock16MHz(void){
-    CSCTL0_H = 0xA5;          // Unlock CS registers
-    CSCTL1 = 0x0040;          // DCO = 16 MHz
-    CSCTL2 = 0x0033;          // SMCLK = MCLK = DCO
-    CSCTL3 = 0x0000;          // No division
-    CSCTL0_H = 0x00;          // Lock CS registers
+    // CSCTL0_H = 0xA5;          // Unlock CS registers
+    // CSCTL1 = 0x0040;          // DCO = 16 MHz
+    // CSCTL2 = 0x0033;          // SMCLK = MCLK = DCO
+    // CSCTL3 = 0x0000;          // No division
+    // CSCTL0_H = 0x00;          // Lock CS registers
+
+    __bis_SR_register(SCG0);                 // disable FLL
+    CSCTL3 |= SELREF__REFOCLK;               // Set REFO as FLL reference source
+    CSCTL1 = DCOFTRIMEN_1 | DCOFTRIM0 | DCOFTRIM1 | DCORSEL_5;// DCOFTRIM=3, DCO Range = 16MHz
+    CSCTL2 = FLLD_0 + 487;                   // DCODIV = 16MHz (N = 487: (487+1) * 32768 Hz ≈ 16 MHz)
+    __delay_cycles(3);
+    __bic_SR_register(SCG0);                 // enable FLL
+
+    CSCTL4 = SELMS__DCOCLKDIV | SELA__REFOCLK; // set default REFO(~32768Hz) as ACLK source, MCLK/SMCLK from DCOCLKDIV
+}
+
+void Software_Trim()
+{
+    unsigned int oldDcoTap = 0xffff;
+    unsigned int newDcoTap = 0xffff;
+    unsigned int newDcoDelta = 0xffff;
+    unsigned int bestDcoDelta = 0xffff;
+    unsigned int csCtl0Copy = 0;
+    unsigned int csCtl1Copy = 0;
+    unsigned int csCtl0Read = 0;
+    unsigned int csCtl1Read = 0;
+    unsigned int dcoFreqTrim = 3;
+    unsigned char endLoop = 0;
+
+    do
+    {
+        CSCTL0 = 0x100;                         // DCO Tap = 256
+        do
+        {
+            CSCTL7 &= ~DCOFFG;                  // Clear DCO fault flag
+        }while (CSCTL7 & DCOFFG);               // Test DCO fault flag
+
+        __delay_cycles((unsigned int)3000 * 16);// Wait FLL lock status (FLLUNLOCK) to be stable
+
+        while((CSCTL7 & (FLLUNLOCK0 | FLLUNLOCK1)) && ((CSCTL7 & DCOFFG) == 0));
+
+        csCtl0Read = CSCTL0;                   // Read CSCTL0
+        csCtl1Read = CSCTL1;                   // Read CSCTL1
+
+        oldDcoTap = newDcoTap;                 // Record DCOTAP value of last time
+        newDcoTap = csCtl0Read & 0x01ff;      // Get DCOTAP value of this time
+        dcoFreqTrim = (csCtl1Read & 0x0070)>>4;// Get DCOFTRIM value
+
+        if(newDcoTap < 256)                    // DCOTAP < 256
+        {
+            newDcoDelta = 256 - newDcoTap;     // Delta value between DCPTAP and 256
+            if((oldDcoTap != 0xffff) && (oldDcoTap >= 256)) // DCOTAP cross 256
+                endLoop = 1;                   // Stop while loop
+            else
+            {
+                dcoFreqTrim--;
+                CSCTL1 = (csCtl1Read & (~DCOFTRIM)) | (dcoFreqTrim<<4);
+            }
+        }
+        else                                   // DCOTAP >= 256
+        {
+            newDcoDelta = newDcoTap - 256;     // Delta value between DCPTAP and 256
+            if(oldDcoTap < 256)                // DCOTAP cross 256
+                endLoop = 1;                   // Stop while loop
+            else
+            {
+                dcoFreqTrim++;
+                CSCTL1 = (csCtl1Read & (~DCOFTRIM)) | (dcoFreqTrim<<4);
+            }
+        }
+
+        if(newDcoDelta < bestDcoDelta)         // Record DCOTAP closest to 256
+        {
+            csCtl0Copy = csCtl0Read;
+            csCtl1Copy = csCtl1Read;
+            bestDcoDelta = newDcoDelta;
+        }
+
+    }while(endLoop == 0);                      // Poll until endLoop == 1
+
+    CSCTL0 = csCtl0Copy;                       // Reload locked DCOTAP
+    CSCTL1 = csCtl1Copy;                       // Reload locked DCOFTRIM
+    while(CSCTL7 & (FLLUNLOCK0 | FLLUNLOCK1)); // Poll until FLL is locked
 }
 
 void ClearGPSBuffer(void){
@@ -694,6 +798,7 @@ double nmea_to_decimal(double coord, char hemi) {
 }
 
 void parse_gngga(char *line) {
+    // gngas check has been moved to main
     if (!is_gngga(line)){
         return;
     }
@@ -747,7 +852,8 @@ All these pins are broken out on the DEV board which means we can use them tempo
 
 */
 
-#define MESSAGE {1,2}
+#define MESSAGE {1,2,3,4,5}
+#define PREAMBLE_LENGTH 8
 
 // This gets passed around a lot, so it gets it's own type
 GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
@@ -756,9 +862,10 @@ GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
 void LoRaTX() {
     uint8_t data[] = MESSAGE;
     while(1){
-        radio_transmit_start(data, 5, radioChipSelPin); // Look to change payload lenght to 2
+        radio_transmit_start(data, 5, radioChipSelPin);
 
         while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
+        __delay_cycles(8000000); // 1 second delay at 8MHz
     }
 }
 
@@ -781,11 +888,11 @@ void gpio_init() {
     *radioChipSelPin.pout |= radioChipSelPin.pin; // Set HIGH
 
     // LEDs: Set P2.0, 2.1, 2.2 to output
-    P2DIR |= (BIT0 | BIT1 | BIT2);
+    //P2DIR |= (BIT0 | BIT1 | BIT2);
 
     // Unlock GPIO
     PM5CTL0 &= ~LOCKLPM5;
-    P2OUT |= (BIT0 | BIT1 | BIT2);
+    //P2OUT |= (BIT0 | BIT1 | BIT2);
 }
 
 // =======================================
@@ -886,7 +993,7 @@ void RecoveryMode(void) {
 
 // =======================================
 
-//int main(void) {
+int main(void) {
     // bool recovery_active = false;
 
     // // LoRa
@@ -964,6 +1071,7 @@ void RecoveryMode(void) {
     // Successful GPS testing: watch LAT LONG. Correct values when fixed. ZERSO otherwise.
     WDTCTL = WDTPW | WDTHOLD;
     InitClock16MHz();
+    Software_Trim();
 
     P1DIR |= BIT0;             // RED LED as output
     P1OUT &= ~BIT0;            // Turn RED LED off
@@ -971,7 +1079,7 @@ void RecoveryMode(void) {
     InitGPSUART();
     
     while(1){
-        __bis_SR_register(LPM0_bits + GIE); // Enter LPM0, Enable Interrupt
+        __bis_SR_register(GIE); // Enter LPM0, Enable Interrupt
         if (gps_line_ready) {
             gps_line_ready = 0;
 
@@ -982,10 +1090,17 @@ void RecoveryMode(void) {
             // }
             // gps_buffer[gps_index] = '\0'; // ensure string is properly terminated
             
-            parse_gngga((char*)gps_buffer);
+            //parse_gngga((char*)gps_buffer);   // attempt to parase after every sentence
+
+            // Parse gngga only
+            if (is_gngga((char*)gps_buffer)) {
+                parse_gngga((char*)gps_buffer);
+            } 
         }
     }
     */
+    
+    
     
     
 
@@ -1109,7 +1224,6 @@ void RecoveryMode(void) {
 
     
     // UNTESTED LoRa Code
-    /*
     // Stop watchdog timer
     WDTCTL = WDTPW | WDTHOLD;
 
@@ -1117,17 +1231,18 @@ void RecoveryMode(void) {
     spi_B1_init();
 
     lora_configure(
-            BANDWIDTH62_5K,
-            CODINGRATE4_5,
-            CRC_DISABLE,
-            EXPLICIT_HEADER_MODE,
-            POLARITY_NORMAL_MODE,
-            PREAMBLE_LENGTH,
-            SPREADINGFACTOR1024,
-            SYNC_WORD_RESET,
+            BANDWIDTH125K,              // 125 khz
+            CODINGRATE4_5,              // Coding rate 4/5
+            CRC_ENABLE,                 // Enable CRC
+            EXPLICIT_HEADER_MODE,       // Explicit header
+            POLARITY_NORMAL_MODE,       // Normal IQ
+            PREAMBLE_LENGTH,            // Preamble 8
+            SPREADINGFACTOR128,         // SF7
+            SYNC_WORD_RESET,            // 0x12
             radioChipSelPin
     );
     
     LoRaTX();
-    */
-//} 
+    
+    
+} 
