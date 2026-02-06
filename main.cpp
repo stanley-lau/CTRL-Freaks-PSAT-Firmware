@@ -14,13 +14,11 @@
 #include "bmp_buffer.hpp"
 #include "accl.hpp"
 
-
-// LoRa #includes
 #include "LoRa/spi.hpp"
 #include "LoRa/lora.hpp"
 #include "LoRa/gpio.hpp"
 
-// ==== Define Constants ==== //
+// ==================== Constants =========================//
 // PWM
 #define PWM_PERIOD 500                  // PWM Period
 
@@ -55,7 +53,7 @@
 // GPS 
 #define GPS_BUFFER_SIZE 128
 
-// ==== Interrupts ==== //
+// ==================== Interrupt Service Routines =========================//
 
 // BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code run to notify BMP Data is ready. 
 volatile bool bmp_data_ready = false;
@@ -84,7 +82,7 @@ __interrupt void ADC_ISR(void) {
     }
 }
 
-// ================= PWM =================
+// ==================== Coil PWM =========================//
 
 // InitCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
@@ -127,6 +125,8 @@ void SetCoilPWM(uint8_t duty_cycle) {
     }
 }
 
+// ==================== Voltage Regulator Enable  =========================//
+
 // After turning on PWM, TurnOnRegulator is needed to turn on the voltage regulator
 void TurnOnRegulator() {
     // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
@@ -139,6 +139,8 @@ void TurnOnRegulator() {
     // Enable voltage regulator
     P3OUT |= BIT5;
 }
+
+// ==================== Fan PWM =========================//
 
 // InitFanPWM initialises PWM for Port P6.1 (FAN_Coil)
 void InitFanPWM(){
@@ -182,9 +184,9 @@ void SetFanPWM(uint8_t duty_cycle) {
 }
 
 
-// ======================== UPDATEFLIGHTSTATE ==========================
+// ==================== FlightStates =========================//
 
-// ==== FlightStates ==== // 
+// Initialise flightstates
 enum FlightState {PREFLIGHT, FLIGHT, LANDED};
 enum FlightState current_flight_state = PREFLIGHT;
 enum FlightState prev_flight_state;
@@ -639,7 +641,7 @@ void DisableACCLI2C() {
     I2CWriteRegister(ACCL_ADDR, 0x1F, 0x00); // Turns accelerometer and gyroscope off
 }
 
-//===================== Combining ACCL and BMP data. Implemented into UpdateFlightState ====
+//===================== Combining ACCL and BMP data. Implemented into UpdateFlightState ====================//
 
 void UpdateFlightStateI2C() {
     float delta_i2c;
@@ -683,23 +685,9 @@ void UpdateFlightStateI2C() {
     }
 }
 
-// Main function. Reading pressure data in Pascals from BMP then using it in UpdateFlightState. 
-/*
-int main(void) {
-    volatile float pressure;
-    WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. 
 
-    SetUpBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c); 
-    ConfigureACCLI2C();
 
-    while (1) {
-        ProcessBMPDataI2C(); 
-        UpdateFlightStateI2C();
-    }
-}
-*/
-
-/* -------------------------------ADC------------------------------- */
+// ==================== ADC =========================//
 
 // Initialise ADC for use. 
 void InitADC () {
@@ -830,7 +818,7 @@ bool ChamExceedsThreshold() {
 }
 
 
-// ====== Working Background Timer ====== //
+// ==================== Backgorund Timer =========================//
 
 // Global variables
 volatile uint16_t delay_seconds = 0;
@@ -894,12 +882,12 @@ __interrupt void Timer3_B0_ISR(void)
 */
 
 
-// ======================  GPS   ======================
+// ==================== GPS  =========================//
 
 volatile char gps_buffer[GPS_BUFFER_SIZE];
 volatile uint8_t gps_index = 0;
 volatile uint8_t gps_line_ready = 0;
-volatile double longitude = 0.0; // make double for precision!!! not int
+volatile double longitude = 0.0;
 volatile double latitude = 0.0;
 volatile uint8_t gps_sats = 0;
 
@@ -945,17 +933,24 @@ void InitGPSUART(){
     
     // CRITICAL: Release UART from reset, enable interrupt, and unlock GPIO
     UCA0CTLW0 &= ~UCSWRST;                  // Release eUSCI from reset
-    PM5CTL0 &= ~LOCKLPM5;                   // Unlock GPIO
+    //PM5CTL0 &= ~LOCKLPM5;                   // Unlock GPIO - THis should be called ONCE in main after Inits:
     UCA0IE |= UCRXIE;                       // Enable RX interrupt
 }
+
+// Intialised GPS_enable boolean flag to prevent ISR code running redundantly when GPS reading is not required.
+volatile bool GPS_enable = false;
 
 // UART ISR
 #pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
 __interrupt void EUSCI_A0_ISR(void){
-    
+
+    // Ignore incoming bytes unless GPS reads are enabled
+    if (!GPS_enable) {
+        return;
+    }
+
     P1OUT ^= BIT0;              // Toggle LED for debugging
     char received = UCA0RXBUF;
-    
     
     // GPS MODULE WORKING
     // Only store printable characters, comma, and newline
@@ -1111,9 +1106,9 @@ double nmea_to_decimal(double coord, char hemi) {
 
 void parse_gngga(char *line) {
     // gngas check has been moved to main
-    if (!is_gngga(line)){
-        return;
-    }
+    // if (!is_gngga(line)){
+    //     return;
+    // }
     
     char *token;
     uint8_t field = 0;
@@ -1173,12 +1168,36 @@ GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
 
 // LoRa TX function
 void LoRaTX() {
+
+    
     uint8_t data[] = MESSAGE;
     while(1){
         radio_transmit_start(data, 5, radioChipSelPin);
 
         while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
     }
+    
+
+    /*
+    // Send latitude and longitude as 4-byte signed integers scaled by 1e7.
+    // If no GPS fix, transmit 0,0.
+    int32_t lat_i = 0;
+    int32_t lon_i = 0;
+
+    bool has_fix = (gps_sats > 0);
+    if (has_fix) {
+        lat_i = (int32_t)(latitude * 1e7);
+        lon_i = (int32_t)(longitude * 1e7);
+    }
+
+    uint8_t data[8];
+    memcpy(&data[0], &lat_i, sizeof(int32_t));
+    memcpy(&data[4], &lon_i, sizeof(int32_t));
+
+    radio_transmit_start(data, sizeof(data), radioChipSelPin);
+    while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
+    */
+
 }
 
 // Loop until either we received a packet or the Rx operation times out
@@ -1194,7 +1213,7 @@ RadioRxStatus wait_for_received_packet(uint8_t data_received[], uint16_t* messag
     }
 }
 
-void gpio_init() {
+void LoRaInitGPIO() {
     // Radio chip select pin
     *radioChipSelPin.pdir |= radioChipSelPin.pin; // Set as output
     *radioChipSelPin.pout |= radioChipSelPin.pin; // Set HIGH
@@ -1203,7 +1222,7 @@ void gpio_init() {
     P2DIR |= (BIT0 | BIT1 | BIT2);
 
     // Unlock GPIO
-    PM5CTL0 &= ~LOCKLPM5;
+    // PM5CTL0 &= ~LOCKLPM5; commented out for integration
     P2OUT |= (BIT0 | BIT1 | BIT2);
 }
 
@@ -1222,13 +1241,37 @@ void flash_led_green(void){
     __delay_cycles(50000);
 }
 
-// =======================================
+// ==================== GPS + LoRa =========================//
+
+// TransmitGPS assumes that the GPIO Pins, modules, and initialisations have been completed. This function should read GPS data, and transmit it over LoRa
+// The values [Lat, Lon] should be transmitted. [0, 0] should be transmittted when there is no fix. 
+void TransmitGPS(){
+    //GPS_enable = true;      // Set true - include flag check in ISR!
+
+    __bis_SR_register(GIE); // Enter LPM0, Enable Interrupt
+    if (gps_line_ready) {
+
+        // Disable UART RX interrupt to prevent ISR corrupting gps_buffer during parse/transmit
+        // Temporarily disbale GPS to prevent buffer from being overriden during transmission
+        UCA0IE &= ~UCRXIE;
+
+        gps_line_ready = 0;
+
+        // Parse gngga only
+        if (is_gngga((char*)gps_buffer)) {
+
+            parse_gngga((char*)gps_buffer);
+            LoRaTX();               //      <=== appears to get stuck in this function call in debug mode.
+        } 
+    }
+
+    // Re-enable UART RX interrupt
+    UCA0IE |= UCRXIE;
+}
 
 
 
-
-
-// =======================================
+// ==================== Recovery Function =========================//
 
 void RecoveryMode(void) {
     uint8_t duty_cycle = 0;
@@ -1318,9 +1361,9 @@ void RecoveryMode(void) {
     }
 }
 
-// =======================================
+// ==================== Main Flight Loop =========================//
 
-//int main(void) {
+int main(void) {
     // bool recovery_active = false;
 
     // // LoRa
@@ -1389,46 +1432,6 @@ void RecoveryMode(void) {
     //     }
     // }
 
-
-    
-    
-    /*
-    // Successful GPS testing: watch LAT LON. Correct values when fixed. ZERSO otherwise.
-    WDTCTL = WDTPW | WDTHOLD;
-    InitClock16MHz();
-    Software_Trim();
-
-    P1DIR |= BIT0;             // RED LED as output
-    P1OUT &= ~BIT0;            // Turn RED LED off
-    ClearGPSBuffer();
-    InitGPSUART();
-    
-    while(1){
-        __bis_SR_register(GIE); // Enter LPM0, Enable Interrupt
-        if (gps_line_ready) {
-            gps_line_ready = 0;
-
-            // Loops through buffer to clear NULL
-            // --- Add this BEFORE calling parse_gpgga --- sanitise buffer before passing to remove NULL which stops strtok from working
-            // for (int i = 0; i < gps_index; i++) {
-            //     if (gps_buffer[i] == 0) gps_buffer[i] = ',';  // replace nulls with comma
-            // }
-            // gps_buffer[gps_index] = '\0'; // ensure string is properly terminated
-            
-            //parse_gngga((char*)gps_buffer);   // attempt to parase after every sentence
-
-            // Parse gngga only
-            if (is_gngga((char*)gps_buffer)) {
-                parse_gngga((char*)gps_buffer);
-            } 
-        }
-    }
-    */
-    
-    
-    
-    
-    
 
 
     /*
@@ -1558,6 +1561,40 @@ void RecoveryMode(void) {
         
     }
     */
+    
+
+    /*
+    // Successful GPS testing: watch LAT LON. Correct values when fixed. ZERSO otherwise.
+    WDTCTL = WDTPW | WDTHOLD;
+    InitClock16MHz();
+    Software_Trim();
+
+    P1DIR |= BIT0;             // RED LED as output
+    P1OUT &= ~BIT0;            // Turn RED LED off
+    ClearGPSBuffer();
+    InitGPSUART();
+    
+    while(1){
+        __bis_SR_register(GIE); // Enter LPM0, Enable Interrupt
+        if (gps_line_ready) {
+            gps_line_ready = 0;
+
+            // Loops through buffer to clear NULL
+            // --- Add this BEFORE calling parse_gpgga --- sanitise buffer before passing to remove NULL which stops strtok from working
+            // for (int i = 0; i < gps_index; i++) {
+            //     if (gps_buffer[i] == 0) gps_buffer[i] = ',';  // replace nulls with comma
+            // }
+            // gps_buffer[gps_index] = '\0'; // ensure string is properly terminated
+            
+            //parse_gngga((char*)gps_buffer);   // attempt to parase after every sentence
+
+            // Parse gngga only
+            if (is_gngga((char*)gps_buffer)) {
+                parse_gngga((char*)gps_buffer);
+            } 
+        }
+    }
+    */
 
     
     /*
@@ -1565,7 +1602,8 @@ void RecoveryMode(void) {
     // Stop watchdog timer
     WDTCTL = WDTPW | WDTHOLD;
 
-    gpio_init();
+    LoRaInitGPIO();
+    PM5CTL0 &= ~LOCKLPM5;   // Unlock GPIO
     spi_B1_init();
 
     lora_configure(
@@ -1584,4 +1622,59 @@ void RecoveryMode(void) {
     */
     
     
-//} 
+
+
+
+    /*
+    // GPS + LoRa integration WORK IN PROGRES
+
+    WDTCTL = WDTPW | WDTHOLD;   // Stop Watchdog timer
+    InitClock16MHz();           // Init 16mhz clock
+    Software_Trim();            // Handle clock drift 
+    P1DIR |= BIT0;              // RED LED as output
+    P1OUT &= ~BIT0;             // Turn RED LED off
+
+    LoRaInitGPIO();             // Init LoRa GPIO pins
+    spi_B1_init();              // Init SPI module for LoRa
+    lora_configure(
+            BANDWIDTH125K,              // 125 khz
+            CODINGRATE4_5,              // Coding rate 4/5
+            CRC_ENABLE,                 // Enable CRC
+            EXPLICIT_HEADER_MODE,       // Explicit header
+            POLARITY_NORMAL_MODE,       // Normal IQ
+            PREAMBLE_LENGTH,            // Preamble 8
+            SPREADINGFACTOR128,         // SF7
+            SYNC_WORD_RESET,            // 0x12
+            radioChipSelPin
+    );                          // Configure LoRa
+
+    ClearGPSBuffer();           // Clear GPS buffer
+
+    GPS_enable = true;
+    InitGPSUART();              // Init GPS (GPIO + UART module) Once this function is called, the ISR will be called IMMEDIATELY
+    PM5CTL0 &= ~LOCKLPM5;
+
+    while(1){
+        TransmitGPS();
+    }
+    */
+    
+
+
+
+    /*
+    // Main function. Reading pressure data in Pascals from BMP then using it in UpdateFlightState. 
+    volatile float pressure;
+    WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. 
+
+    SetUpBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c); 
+    ConfigureACCLI2C();
+
+    while (1) {
+        ProcessBMPDataI2C(); 
+        UpdateFlightStateI2C();
+    }
+    */
+    
+    
+} 
