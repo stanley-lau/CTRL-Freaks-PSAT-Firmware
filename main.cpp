@@ -1241,7 +1241,7 @@ void flash_led_green(void){
     __delay_cycles(50000);
 }
 
-// ==================== GPS + LoRa =========================//
+// ==================== GPS + LoRa integration =========================//
 
 // TransmitGPS assumes that the GPIO Pins, modules, and initialisations have been completed. This function should read GPS data, and transmit it over LoRa
 // The values [Lat, Lon] should be transmitted. [0, 0] should be transmittted when there is no fix. 
