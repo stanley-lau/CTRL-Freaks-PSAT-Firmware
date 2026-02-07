@@ -163,7 +163,6 @@ void EnableRegulator(){
     P3OUT |= BIT5;
 }
 
-
 // After turning on PWM, TurnOnRegulator is needed to turn on the voltage regulator
 void TurnOnRegulator() {
     // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
@@ -239,7 +238,6 @@ void SetFanPWM(uint8_t duty_cycle) {
     }
 
 }
-
 
 // ==================== FlightStates =========================//
 
@@ -566,7 +564,7 @@ void PushToAltitudeBufferI2C(float altitude_value) {
 }
 
 // Perform processing: Reading pressure data, storing into pressure buffer, converting to altitude, storing in altitude buffer
-void ProcessBMPDataI2C () {
+void ProcessBMPDataI2C() {
     // Check if the BMP390 has new data ready
     UpdateBMPStatusI2C(); 
 
@@ -1352,6 +1350,25 @@ void TransmitGPS(){
     UCA0IE |= UCRXIE;
 }
 
+// ==================== Run State Behaviour =========================//
+
+void RunStateBehaviour(){
+    switch (current_flight_state) {
+        case PREFLIGHT:
+            break;
+        case FLIGHT:
+            // Log some data here;
+            break;
+        case LANDED:
+            if (!recovery_active){
+                recovery_active = true;
+                RecoveryMode();
+            }
+            break;
+        default:
+            break;
+    }
+}
 
 
 // ==================== Recovery Function =========================//
@@ -1499,12 +1516,12 @@ void ConfigPeripheral(){
 
 /*
     Subsystems list;
-    coil pwm    done
-    fan pwm     done
+    coil pwm    done and tested
+    fan pwm     done and tested
     bmp         
     accl
-    adc         done
-    gps         done
+    adc         done and tested
+    gps         done and tested
     lora        done
     sd card
     background timer    done
@@ -1515,8 +1532,6 @@ void ConfigPeripheral(){
 
 int main(void) {
 
-    
-    
     WDTCTL = WDTPW | WDTHOLD;           // Stop Watchdog Timer
 
     InitClock16MHz();                   // Init 16Mhz CLK
@@ -1529,8 +1544,29 @@ int main(void) {
     __enable_interrupt();               // enable interrupts
 
     while(1){
+        // read sensors (ProcessBMPDataI2C())
+        // update state (UpdateFlightStateI2C())
+        // behaviour (RunStateBehaviour())
+    }
+
+    /*
+    To do:
+    - integrate/split sensor initialisation code to fit into InitGPIO() and Config() for main()
+    - test sensors after integration
+    - test GPS + LoRa Integration
+    - test recovery
+    - test entire flight loop
+
+    - what code to run/change to test sensors with kyle's bmp module?
+    */
+
+
+    /*
+    // GPS testing for main
+    while(1){
         TransmitGPS();
     }
+    */
     
 
 
