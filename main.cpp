@@ -73,7 +73,7 @@ __interrupt void ADC_ISR(void) {
     {
         case ADCIV__ADCIFG0:
             adc_result = ADCMEM0;   // After memory is read, ADCIFG0 is cleared. 
-            P1OUT ^= BIT0;
+            //P1OUT ^= BIT0;
             __bic_SR_register_on_exit(CPUOFF);
             break;
 
@@ -83,6 +83,28 @@ __interrupt void ADC_ISR(void) {
 }
 
 // ==================== Coil PWM =========================//
+
+
+// With the intention to tidy up the architecture main() should follow: InitGPIOs --> Unlock GPIO (ONCE) --> Configure Peripheral --> while(1) flightloop
+void InitCoilGPIO(){
+    // Setup Pins
+    P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to output. BIT1 Corresponds to PIN1 on the Port.
+    
+    P5SEL0 |= BIT1;     // Set BIT 1 of P5SEL0 = 1
+    P5SEL1 &= ~BIT1;    // Set BIT 1 of P5SEL1 = 0
+}
+
+void ConfigCoilPWM(){
+    // Setup Compare Reg
+    TB2CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
+    TB2CCR2 = 0;                                // 0% duty cycle
+    TB2CCTL2 = OUTMOD_7;                        // Reset/Set PWM mode, refer to YT vid
+    // TB2CCRn is the timer attached to Port P5 from Table 6-67
+
+    // Setup Timer_B2
+    TB2CTL =    TBCLR       |       TBSSEL_2    | MC_1;
+}
+
 
 // InitCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
 // Avoid writing to TB2CTL after init
@@ -127,6 +149,21 @@ void SetCoilPWM(uint8_t duty_cycle) {
 
 // ==================== Voltage Regulator Enable  =========================//
 
+void InitRegulatorGPIO(){
+    // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
+    P3SEL0 &= ~BIT5;  
+    P3SEL1 &= ~BIT5;
+
+    // REG_EN as output
+    P3DIR |= BIT5;
+}
+
+void EnableRegulator(){
+    // Enable voltage regulator
+    P3OUT |= BIT5;
+}
+
+
 // After turning on PWM, TurnOnRegulator is needed to turn on the voltage regulator
 void TurnOnRegulator() {
     // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
@@ -141,6 +178,26 @@ void TurnOnRegulator() {
 }
 
 // ==================== Fan PWM =========================//
+void InitFanGPIO(){
+    // Setup Pins
+    P6DIR  |= BIT1;                             // Set BIT1 of P6DIR to output. 
+
+    P6SEL0 |= BIT1;     // Set BIT 1 of P6SEL0 = 1
+    P6SEL1 &= ~BIT1;    // Set BIT 1 of P6SEL1 = 0
+    //Page 106 --> 01b = select timer Timer_B3.2
+}
+
+void ConfigFanPWM(){
+    // Setup Compare Reg
+    TB3CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
+    TB3CCR2 = 0;                                // 0% duty cycle
+    TB3CCTL2 = OUTMOD_7;                        // Reset/Set PWM mode, refer to YT vid
+    // TB3CCRn is the timer attached to Port P6 from Table 6-68
+
+    // Setup Timer 3.2
+    TB3CTL =    TBCLR       |       TBSSEL_2    | MC_1;
+    //     = Clear Timer_B0 |  Set SMCLK as clk | Up-Mode: Count upwards
+}
 
 // InitFanPWM initialises PWM for Port P6.1 (FAN_Coil)
 void InitFanPWM(){
@@ -690,8 +747,8 @@ void UpdateFlightStateI2C() {
 // ==================== ADC =========================//
 
 // Initialise ADC for use. 
-void InitADC () {
-    WDTCTL = WDTPW | WDTHOLD;                   // Stop watchdog timer
+void InitADCRef() {
+    //WDTCTL = WDTPW | WDTHOLD;                   // Stop watchdog timer
 
     PMMCTL2 |= REFVSEL_2 + INTREFEN_1;          // Enable and set the internal reference voltage. 
     while (!(PMMCTL2 & REFGENRDY));             // Wait until V_ref is ready to be used.
@@ -715,7 +772,13 @@ void InitADCGPIO(){
 
 void ConfigADC() {
     ADCCTL0 = ADCSHT_4 | ADCON;                         // Sample and Hold time for 64 clk cycles | enable ADC (Start conversion later)
-    ADCCTL1 = ADCSSEL_2 | ADCSHP;                       // Select SMCLK | signal sourced from sampling timer.
+
+    // Use this clock when 16Mhz is not initialised:
+    // ADCCTL1 = ADCSSEL_2 | ADCSHP;                       // Select SMCLK | signal sourced from sampling timer. (This clock causes issues ADC timing, results in incorrect ADC readings. SMCLK changes from ~1MHz (default) to 16MHz, which affects your ADC sample-and-hold timing. The ADC needs proper timing for accurate conversions.)
+
+    // Use this clock when 16Mhz is initialised:
+    ADCCTL1 = ADCSSEL_1 | ADCSHP;                      // Select ACLK | signal sourced from sampling timer. ACLK is 32.768kHz. (This should fix ADC timing issues and give correct ADC readings when 16mhz clock is initialised)
+
     ADCCTL2 = ADCRES_2;                                 // Set 12-Bit ADC Resolution
     ADCIE = ADCIE0;                                     // Enable interrupts
 }
@@ -754,7 +817,7 @@ int16_t GetChamberTemp () {
 
     // Chamber thermistor
     StartADC(ADC_CHAM_THERM);
-    __bis_SR_register(CPUOFF | GIE);
+    __bis_SR_register(CPUOFF | GIE);            // Enter Sleep Mode and enable interrupts
     chamThermADC = adc_result; 
 
     
@@ -766,13 +829,13 @@ int16_t GetChamberTemp () {
 // Return the temperature of the battery 
 int16_t GetBatteryTemp () {
     volatile uint16_t batThermADC;
+    volatile uint16_t battery_ADC_temperature;
 
     // Battery thermistor
     StartADC(ADC_BAT_THERM);
-    __bis_SR_register(CPUOFF | GIE);
+    __bis_SR_register(CPUOFF | GIE);        // Enter Sleep Mode and enable interrupts
     batThermADC = adc_result;
     
-    volatile uint16_t battery_ADC_temperature;
     battery_ADC_temperature = TempConversion(batThermADC);
     return battery_ADC_temperature;
 }
@@ -833,8 +896,8 @@ void start_delay_seconds(uint16_t seconds)
     __enable_interrupt();
 }
 
-// Initialise Timer_B for tick every 1 second. 
-void Timer3_init_1s_tick(void)
+// Initialise Timer_B for tick every 1 second. FKA: Timer3_init_1s_tick
+void ConfigBackgroundTimer()
 {
     TB3CTL = TBSSEL__ACLK | MC__UP | TBCLR;
     TB3CCR0 = 32768 - 1;     // 1 second
@@ -860,7 +923,7 @@ __interrupt void Timer3_B0_ISR(void)
 /*
     WDTCTL = WDTPW | WDTHOLD;
 
-        Timer3_init_1s_tick();
+        ConfigBackgroundTimer();
         __enable_interrupt();
 
         start_delay_seconds(600);   // start 10-minute timer
@@ -893,10 +956,30 @@ volatile uint8_t gps_sats = 0;
 
 /*
 Connect:
-MSP430 P1.6 (TEMP UART RX) <-- GPS TX PIN
+MSP430 P1.6 (TEMP UART RX) <-- GPS "TX" PIN
+MSP430 P1.7 (TEMP UART TX) --> GPS "RX" PIN
 MSP430 3v3 -- GPS 3v3
 MSP430 GND -- GPS GND: 
 */
+
+void InitGPSGPIO(){
+    // Configure pins for UART
+    P1SEL0 |= BIT6 | BIT7;   // RX + TX
+    P1SEL1 &= ~(BIT6 | BIT7);
+    // TX not used  
+}
+
+void ConfigGPSUART(){
+    // Configure UART
+    UCA0CTLW0 = UCSWRST;                // Put eUSCI in reset          
+    UCA0CTLW0 |= UCSSEL__SMCLK;         // Select SMCLK as clock source
+    UCA0BRW   = 8;
+    UCA0MCTLW = UCOS16 | (10 << 4) | (0xF7 << 8);           // // 115200 baud @ 16MHz (working 115200 baud for beacon)
+    
+    // CRITICAL: Release UART from reset, enable interrupt, and unlock GPIO
+    UCA0CTLW0 &= ~UCSWRST;                  // Release eUSCI from reset
+    UCA0IE |= UCRXIE;                       // Enable RX interrupt
+}
 
 // Initialise UART pins for GPS
 void InitGPSUART(){
@@ -1213,7 +1296,7 @@ RadioRxStatus wait_for_received_packet(uint8_t data_received[], uint16_t* messag
     }
 }
 
-void LoRaInitGPIO() {
+void InitLoRaGPIO() {
     // Radio chip select pin
     *radioChipSelPin.pdir |= radioChipSelPin.pin; // Set as output
     *radioChipSelPin.pout |= radioChipSelPin.pin; // Set HIGH
@@ -1284,7 +1367,7 @@ void RecoveryMode(void) {
     InitCoilPWM(); 
     InitFanPWM();
 
-    Timer3_init_1s_tick();
+    ConfigBackgroundTimer();
     __enable_interrupt();
     
     start_delay_seconds(450); // Initial 7.5 minute delay
@@ -1361,76 +1444,175 @@ void RecoveryMode(void) {
     }
 }
 
+// Stop Watching first:
+
+// Call 16mhz clock setup
+// Software Trim()
+
+// InitGPIO() initialises all GPIO pins
+void InitGPIO(){
+    InitCoilGPIO();                 // P5.1
+    InitFanGPIO();                  // P6.1
+    InitADCRef();
+    InitADCGPIO();                  // P5.0, P5.2, P5.3
+    InitRegulatorGPIO();            // P3.5
+    
+    InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
+    InitGPSGPIO();                  // P1.6, P1.7
+
+}
+
+void InitOnboardLEDS(){
+    // Init LEDs
+    P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
+    P6DIR |= GREEN_LED;
+
+    // Turn LEDs off.
+    P1OUT &= ~RED_LED;
+    P6OUT &= ~GREEN_LED;
+}
+
+// Unlock GPIO once here
+
+// ConfigPeripheral() configures all peripherals such as timers, clocks, modules
+void ConfigPeripheral(){
+    ConfigCoilPWM();
+    ConfigFanPWM();
+    ConfigADC();
+    
+    ConfigBackgroundTimer();
+    spi_B1_init();          // "ConfigLoRaSPI"
+    lora_configure(
+            BANDWIDTH125K,              // 125 khz
+            CODINGRATE4_5,              // Coding rate 4/5
+            CRC_ENABLE,                 // Enable CRC
+            EXPLICIT_HEADER_MODE,       // Explicit header
+            POLARITY_NORMAL_MODE,       // Normal IQ
+            PREAMBLE_LENGTH,            // Preamble 8
+            SPREADINGFACTOR128,         // SF7
+            SYNC_WORD_RESET,            // 0x12
+            radioChipSelPin
+    );
+    ConfigGPSUART();
+}
+
+
+/*
+    Subsystems list;
+    coil pwm    done
+    fan pwm     done
+    bmp         
+    accl
+    adc         done
+    gps         done
+    lora        done
+    sd card
+    background timer    done
+    regulator enable    done
+
+*/
 // ==================== Main Flight Loop =========================//
 
 int main(void) {
-    // bool recovery_active = false;
 
-    // // LoRa
     
-    // InitADC();
-    // InitCoilPWM();
+    
+    WDTCTL = WDTPW | WDTHOLD;           // Stop Watchdog Timer
 
-    // InitACCL();
-    // ConfigureACCL();
+    InitClock16MHz();                   // Init 16Mhz CLK
+    Software_Trim();                    // Compensate Software Dift
 
-    // InitBMP();
-    // ConfigureBMP();
+    InitGPIO();                         // Init all GPIO
+    gpioUnlock();                       // Unlock GPIO
+    ConfigPeripheral();                 // Config Peripherals
 
-    // ground_pressure = CalibrateGroundPressure(100);
-    // initial_altitude = PressureToAltitude(ground_pressure);
+    //__enable_interrupt();               // enable interrupts
+    //PM5CTL0 &= ~LOCKLPM5;
 
-    // current_flight_state = PREFLIGHT;
+    uint16_t chamber_temperature;
+    uint16_t battery_temperature;
 
-    // // LoRa to ensure init was done succesfully 
-
-    // __enable_interrupt(); 
-
-    // while(1){
-    //     /*
-    //     Read from sensors here
-    //     */
-
-    //     // 1. Check if new BMP sample ready
-    //     if (bmp_data_ready) {
-    //         bmp_data_ready = false;
-    //         GetPressure();
-    //             if (available_samples > 0) {
-    //                 // read the next sample from buffer
-    //                 //BMPData raw = bmpBuffer[read_index]; // RAW WTF???
-    //                 const volatile BMPData& raw = bmpBuffer[read_index];
-    //                 //I think this is meant to be raw_pressure?
-
-    //                 // advance read_index and decrease available_samples
-    //                 read_index = (read_index + 1) % BMP_BUFFER_SIZE;
-    //                 available_samples--;
-
-    //                 // convert to altitude and push to sliding window
-    //                 // float altitude = PressureToAltitude(bmpBuffer[read_index].pressure);
-    //                 float altitude = PressureToAltitude(raw.pressure); //This is meant to raw_pressure?
-    //                 AltWindow_Push(altitude);
-    //             }
-    //     }
+    while(1)
+    {
+        // Start Conversion
+        //chamber_temperature = GetChamberTemp();
+        battery_temperature = GetBatteryTemp();
+        
+    }
+    
+    
 
 
-    //     // Update Flight State // should pass in small sample of data for flight determination.
-    //     UpdateFlightState();
+    /*
+    // old main function
+    bool recovery_active = false;
 
-    //     // State-depened behaviour
-    //     switch (current_flight_state) {
-    //         case PREFLIGHT:
-    //             break;
-    //         case FLIGHT:
-    //             break;
-    //         case LANDED:
-    //             if (!recovery_active){
-    //                 // Enter recovery
-    //                 RecoveryMode();
-    //                 recovery_active = true;
-    //             }
-    //             break;
-    //     }
-    // }
+    // LoRa
+    
+    InitADCRef();
+    InitCoilPWM();
+
+    InitACCL();
+    ConfigureACCL();
+
+    InitBMP();
+    ConfigureBMP();
+
+    ground_pressure = CalibrateGroundPressure(100);
+    initial_altitude = PressureToAltitude(ground_pressure);
+
+    current_flight_state = PREFLIGHT;
+
+    // LoRa to ensure init was done succesfully 
+
+    __enable_interrupt(); 
+
+    while(1){
+        
+        //Read from sensors here
+        
+
+        // 1. Check if new BMP sample ready
+        if (bmp_data_ready) {
+            bmp_data_ready = false;
+            GetPressure();
+                if (available_samples > 0) {
+                    // read the next sample from buffer
+                    //BMPData raw = bmpBuffer[read_index]; // RAW WTF???
+                    const volatile BMPData& raw = bmpBuffer[read_index];
+                    //I think this is meant to be raw_pressure?
+
+                    // advance read_index and decrease available_samples
+                    read_index = (read_index + 1) % BMP_BUFFER_SIZE;
+                    available_samples--;
+
+                    // convert to altitude and push to sliding window
+                    // float altitude = PressureToAltitude(bmpBuffer[read_index].pressure);
+                    float altitude = PressureToAltitude(raw.pressure); //This is meant to raw_pressure?
+                    AltWindow_Push(altitude);
+                }
+        }
+
+
+        // Update Flight State // should pass in small sample of data for flight determination.
+        UpdateFlightState();
+
+        // State-depened behaviour
+        switch (current_flight_state) {
+            case PREFLIGHT:
+                break;
+            case FLIGHT:
+                break;
+            case LANDED:
+                if (!recovery_active){
+                    // Enter recovery
+                    RecoveryMode();
+                    recovery_active = true;
+                }
+                break;
+        }
+    }
+    */
 
 
 
@@ -1494,7 +1676,7 @@ int main(void) {
     WDTCTL = WDTPW | WDTHOLD;
 
     // Initialise timer
-    Timer3_init_1s_tick();
+    ConfigBackgroundTimer();
 
     // Init PWM
     InitCoilPWM();
@@ -1538,10 +1720,11 @@ int main(void) {
 
     /*
     //ADC Testing:
-    InitADC();
+    WDTCTL = WDTPW | WDTHOLD;    
+    InitADCRef();               // I believe setting the reference can be put after InitADCGPIO
 
-    P1DIR |= BIT0;             // RED LED as output
-    P1OUT &= ~BIT0;            // Turn RED LED off
+    // P1DIR |= BIT0;             // RED LED as output
+    // P1OUT &= ~BIT0;            // Turn RED LED off
 
     // Configure P5.0
     InitADCGPIO();
@@ -1557,10 +1740,11 @@ int main(void) {
     {
         // Start Conversion
         chamber_temperature = GetChamberTemp();
-        battery_temperature = GetBatteryTemp();
+        //battery_temperature = GetBatteryTemp();
         
     }
     */
+    
     
 
     /*
@@ -1602,7 +1786,7 @@ int main(void) {
     // Stop watchdog timer
     WDTCTL = WDTPW | WDTHOLD;
 
-    LoRaInitGPIO();
+    InitLoRaGPIO();
     PM5CTL0 &= ~LOCKLPM5;   // Unlock GPIO
     spi_B1_init();
 
@@ -1634,7 +1818,7 @@ int main(void) {
     P1DIR |= BIT0;              // RED LED as output
     P1OUT &= ~BIT0;             // Turn RED LED off
 
-    LoRaInitGPIO();             // Init LoRa GPIO pins
+    InitLoRaGPIO();             // Init LoRa GPIO pins
     spi_B1_init();              // Init SPI module for LoRa
     lora_configure(
             BANDWIDTH125K,              // 125 khz
