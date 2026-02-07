@@ -1028,9 +1028,9 @@ volatile bool GPS_enable = false;
 __interrupt void EUSCI_A0_ISR(void){
 
     // Ignore incoming bytes unless GPS reads are enabled
-    if (!GPS_enable) {
-        return;
-    }
+    // if (!GPS_enable) {
+    //     return;
+    // }
 
     P1OUT ^= BIT0;              // Toggle LED for debugging
     char received = UCA0RXBUF;
@@ -1329,9 +1329,9 @@ void flash_led_green(void){
 // TransmitGPS assumes that the GPIO Pins, modules, and initialisations have been completed. This function should read GPS data, and transmit it over LoRa
 // The values [Lat, Lon] should be transmitted. [0, 0] should be transmittted when there is no fix. 
 void TransmitGPS(){
-    //GPS_enable = true;      // Set true - include flag check in ISR!
+    //GPS_enable = true;                // Set true - include flag check in ISR!
 
-    __bis_SR_register(GIE); // Enter LPM0, Enable Interrupt
+    __bis_SR_register(GIE);             // Enable Interrupt
     if (gps_line_ready) {
 
         // Disable UART RX interrupt to prevent ISR corrupting gps_buffer during parse/transmit
@@ -1344,7 +1344,7 @@ void TransmitGPS(){
         if (is_gngga((char*)gps_buffer)) {
 
             parse_gngga((char*)gps_buffer);
-            LoRaTX();               //      <=== appears to get stuck in this function call in debug mode.
+            //LoRaTX();                 //      <=== appears to get stuck in this function call in debug mode. (commenting out as i'm currently testing GPS)
         } 
     }
 
@@ -1526,20 +1526,11 @@ int main(void) {
     gpioUnlock();                       // Unlock GPIO
     ConfigPeripheral();                 // Config Peripherals
 
-    //__enable_interrupt();               // enable interrupts
-    //PM5CTL0 &= ~LOCKLPM5;
+    __enable_interrupt();               // enable interrupts
 
-    uint16_t chamber_temperature;
-    uint16_t battery_temperature;
-
-    while(1)
-    {
-        // Start Conversion
-        //chamber_temperature = GetChamberTemp();
-        battery_temperature = GetBatteryTemp();
-        
+    while(1){
+        TransmitGPS();
     }
-    
     
 
 
@@ -1713,7 +1704,7 @@ int main(void) {
 
         P1OUT ^= RED_LED;
         P6OUT ^= GREEN_LED;
-        __delay_cycles(100000); // 100ms delay
+        __delay_cycles(100000); // 100ms delay at 1MHz (default clock)
     }
     */
 
