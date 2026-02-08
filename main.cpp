@@ -163,6 +163,7 @@ void EnableRegulator(){
     P3OUT |= BIT5;
 }
 
+// This is just a combination of 2 prior functions. Can delete?
 // After turning on PWM, TurnOnRegulator is needed to turn on the voltage regulator
 void TurnOnRegulator() {
     // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
@@ -280,7 +281,7 @@ void UpdateFlightState() {
     }
 }
 
-/* ------------------------------BAROMETER---------------------------*/
+/* =========================== SENSORS =============================== */
 
 #include "hal/blocking_i2c.hpp"
 
@@ -292,7 +293,7 @@ Pin<P1,2> sda;
 I2cMaster<I2C_B0> i2c;
 
 // Slave addresses
-static const uint8_t BMP_ADDR  = 0x77; // Address could also  be 0x76 depending on pin 6.2 
+static const uint8_t BMP_ADDR  = 0x76; // Address could be 0x76 or 0x77 depending on pin 6.2 
 static const uint8_t ACCL_ADDR = 0x68; // Address is 0x68 if AP_AD0 is Low
 
 // Write a single byte to register
@@ -309,32 +310,27 @@ uint8_t I2CReadRegister(uint8_t devAddr, uint8_t reg) {
     // Write the register address, then read 1 byte
     result = i2c.write_read(devAddr, &reg, 1, &val, 1);
     if (result != -1) {
-        // Error occurred during I2C transaction
-        return 0; // or some error code
+        // NAACK were received, indicating error occurred during I2C transaction
+        return 0; 
     }
 
     return val;
 }
 
-// Initialising pins to talk to Barometer and ACCL using I2C 
-void InitSensors() {
+void InitSensorsGPIO() {
     // Set P6.2 to HIGH. --> address = 0x77
-    Pin<P6, 2>::toOutput().setHigh(); 
-
-    // I2C Pins (P1.2 and P1.3). Setting internal pull-up resistors. 
-    Pin<P1, 2>::pullup(); 
-    Pin<P1, 3>::pullup();
+    // Pin<P6, 2>::toOutput().setHigh(); 
 
     sda.function(PinFunction::Primary);
     scl.function(PinFunction::Primary);
+}
 
-    gpioUnlock();
-    __delay_cycles(1000);
-
+void ConfigSensorsI2C() {
     // Initialise I2C (100kHz)
     i2c.init(I2cClockSource::Smclk, 10);
 }
 
+// =========== Barometer ============
 // ----- Calibration Functions ------
 struct BMP390Calib {
     double par_t1, par_t2, par_t3;
@@ -407,7 +403,7 @@ double CompensatePressure(uint32_t raw_pressure) {
 // ----- Calibration Functions Finish ------
 
 volatile bool pressure_data_ready_i2c = false;
-void ConfigureBMPI2C() {
+void ConfigBMPI2C() {
     ReadBMP390Calibration();
 
     // "INT_CTRL" register 
@@ -427,7 +423,7 @@ void ConfigureBMPI2C() {
 
     // "CONFIG" register (0x1F) 
     // May consider adding IIR Filter 
-    //I2CWriteRegister(BMP_ADDR, 0x1F, (1 << 3)); // Bit 1 = 1 --> IIR filter coefficient is set to 1. 
+    I2CWriteRegister(BMP_ADDR, 0x1F, (1 << 3)); // Bit 1 = 1 --> IIR filter coefficient is set to 1. 
 
     //__delay_cycles(10000);
 }
@@ -437,7 +433,7 @@ void UpdateBMPStatusI2C () {
     uint8_t status;
 
     // "STATUS" register 
-    status = I2CReadRegister(BMP_ADDR, 0x00); 
+    status = I2CReadRegister(BMP_ADDR, 0x03); 
     // Checking if pressure sensor data is ready 
     if (status & (1 << 5)) {
         pressure_data_ready_i2c = true;
@@ -517,13 +513,7 @@ float PressureToAltitudeI2C(float pressure) {
 float ground_pressure_i2c; 
 float initial_altitude_i2c; 
 // Initial set up for BMP, and then calculate ground pressure and initial altitude. 
-void SetUpBMPI2C (float *ground_pressure_i2c, float *initial_altitude_i2c) {
-    // Initialise MCU pins for BMP SPI
-    InitSensors();
-    
-    // Configure BMP's internal registers.
-    ConfigureBMPI2C();
-
+void CalibrateBMPI2C (float *ground_pressure_i2c, float *initial_altitude_i2c) {
     // Polling approaching is okay during pre-flight phase. Poll until Pressure_data_ready is true.
     do {
         UpdateBMPStatusI2C();
@@ -606,7 +596,7 @@ void OverallAltitudeDeltaI2C(float *OverallAltitudeChange) {
 
 // ============================== ACCL ============================== 
 
-void ConfigureACCLI2C() {
+void ConfigACCLI2C() {
     //PWR_MGMT0 register
     I2CWriteRegister(ACCL_ADDR, 0x1F, (1 << 0) | (1 << 1)); // Make 0, 1 = 1 --> Places accelerometer in Low Noise (LN) Mode
     // __delay_cycles(500);                  // Small safety delay
@@ -1352,6 +1342,10 @@ void TransmitGPS(){
 
 // ==================== Run State Behaviour =========================//
 
+// Need to define recovery_active. Where is this happening?
+// Also need to move RecoveryMode above this function. 
+
+
 void RunStateBehaviour(){
     switch (current_flight_state) {
         case PREFLIGHT:
@@ -1360,10 +1354,10 @@ void RunStateBehaviour(){
             // Log some data here;
             break;
         case LANDED:
-            if (!recovery_active){
-                recovery_active = true;
-                RecoveryMode();
-            }
+            // if (!recovery_active){
+            //     recovery_active = true;
+            //     RecoveryMode();
+            // }
             break;
         default:
             break;
@@ -1477,6 +1471,8 @@ void InitGPIO(){
     InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
     InitGPSGPIO();                  // P1.6, P1.7
 
+    InitSensorsGPIO();
+
 }
 
 void InitOnboardLEDS(){
@@ -1511,6 +1507,8 @@ void ConfigPeripheral(){
             radioChipSelPin
     );
     ConfigGPSUART();
+
+    ConfigSensorsI2C();
 }
 
 
@@ -1530,8 +1528,9 @@ void ConfigPeripheral(){
 */
 // ==================== Main Flight Loop =========================//
 
-int main(void) {
 
+int main(void) {
+    /*
     WDTCTL = WDTPW | WDTHOLD;           // Stop Watchdog Timer
 
     InitClock16MHz();                   // Init 16Mhz CLK
@@ -1540,6 +1539,8 @@ int main(void) {
     InitGPIO();                         // Init all GPIO
     gpioUnlock();                       // Unlock GPIO
     ConfigPeripheral();                 // Config Peripherals
+    ConfigBMPI2C();
+    ConfigACCLI2C();
 
     __enable_interrupt();               // enable interrupts
 
@@ -1548,6 +1549,7 @@ int main(void) {
         // update state (UpdateFlightStateI2C())
         // behaviour (RunStateBehaviour())
     }
+    */
 
     /*
     To do:
@@ -1559,6 +1561,23 @@ int main(void) {
 
     - what code to run/change to test sensors with kyle's bmp module?
     */
+
+
+
+    /*
+    // Main function. Reading pressure data in Pascals from BMP then using it in UpdateFlightState. 
+    volatile float pressure;
+    WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. 
+
+    CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c); 
+    ConfigureACCLI2C();
+
+    while (1) {
+        ProcessBMPDataI2C(); 
+        UpdateFlightStateI2C();
+    }
+    */
+
 
 
     /*
@@ -1643,6 +1662,7 @@ int main(void) {
 
 
 
+
     /*
     // Demonstrate change in flight state. Passing in mock delta altitude value, and acceleration magnitude. 
     current_flight_state = PREFLIGHT;
@@ -1662,15 +1682,12 @@ int main(void) {
     WDTCTL = WDTPW + WDTHOLD; // Stop Watchdog Timer
     InitCoilPWM();
 
-    while (1)
-	{
-		for (uint16_t i = 0; i < 100; i++)
-		{
+    while (1) {
+		for (uint16_t i = 0; i < 100; i++) {
             SetCoilPWM(i);
             __delay_cycles(50 * PWM_PERIOD);
 		}
-		for (uint16_t i = 100; i > 0; i--)
-		{
+		for (uint16_t i = 100; i > 0; i--) {
 			SetCoilPWM(i);
             __delay_cycles(50 * PWM_PERIOD);
 		}
@@ -1873,19 +1890,5 @@ int main(void) {
 
 
 
-    /*
-    // Main function. Reading pressure data in Pascals from BMP then using it in UpdateFlightState. 
-    volatile float pressure;
-    WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. 
-
-    SetUpBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c); 
-    ConfigureACCLI2C();
-
-    while (1) {
-        ProcessBMPDataI2C(); 
-        UpdateFlightStateI2C();
-    }
-    */
-    
     
 } 
