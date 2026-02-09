@@ -5,6 +5,7 @@
 #include <math.h> 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "hal/gpio.hpp"
 #include "hal/blocking_spi.hpp"
@@ -1241,16 +1242,28 @@ GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
 // LoRa TX function
 void LoRaTX() {
 
-    
+    /*
+    // Working hard coded independent LoRa
     uint8_t data[] = MESSAGE;
     while(1){
         radio_transmit_start(data, 5, radioChipSelPin);
 
         while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
     }
-    
+    */
 
     /*
+    // Able to transmit one packet of data when we grab one GNGGA sentence.
+    uint8_t data[] = MESSAGE;
+    radio_transmit_start(data, 5, radioChipSelPin);
+
+    while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
+    */
+
+    
+    /*
+    // On ground station, this appears as: "Recieved (8 bytes): [blank here]" bc its sending as binary 4-byte integers, not as ASCII. Ground station needs to be set up to receive and parse this correctly.
+    // binary method (your current approach) is more efficient
     // Send latitude and longitude as 4-byte signed integers scaled by 1e7.
     // If no GPS fix, transmit 0,0.
     int32_t lat_i = 0;
@@ -1269,6 +1282,46 @@ void LoRaTX() {
     radio_transmit_start(data, sizeof(data), radioChipSelPin);
     while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
     */
+
+    
+    // Alternatively, we can rewrite the above so that it sends ASCII which is decipherable by our Ground station
+    char data[128];  // Buffer for formatted GPS packet
+    
+    // Determine fix type character
+    char fix_type;
+    if (gps_sats == 0) {
+        fix_type = 'N';  // No fix
+    } else {
+        fix_type = 'G';  // GPS fix (assuming standard GPS, not DGPS)
+    }
+    
+    // Ensure satellite count is within valid range (00-15)
+    uint8_t sat_count = (gps_sats > 15) ? 15 : gps_sats;
+    
+    // Format packet according to protocol:
+    // #C XX:XX:XX UTC; Y; ZZ; -XXX.XXXXX,-XXX.XXXXX; XXXXX.Xm\n
+    // Using 'E' as team identifier (you can change this)
+    // Time set to 00:00:00 as placeholder (you'll need to extract from GPS if needed)
+    // Altitude set to 0.0m as placeholder (you'll need BMP data for actual altitude)
+    
+    if (gps_sats > 0) {
+        // Has GPS fix - send actual coordinates
+        sprintf(data, "#E 00:00:00 UTC; %c; %02d; %.6f,%.6f; 0.0m\n",
+                fix_type,
+                sat_count,
+                latitude,
+                longitude);
+    } else {
+        // No fix - send zeros
+        sprintf(data, "#E 00:00:00 UTC; %c; %02d; 0.000000,0.000000; 0.0m\n",
+                fix_type,
+                sat_count);
+    }
+    
+    radio_transmit_start((uint8_t*)data, strlen(data), radioChipSelPin);
+    while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
+    
+    
 
 }
 
@@ -1333,7 +1386,7 @@ void TransmitGPS(){
         if (is_gngga((char*)gps_buffer)) {
 
             parse_gngga((char*)gps_buffer);
-            //LoRaTX();                 //      <=== appears to get stuck in this function call in debug mode. (commenting out as i'm currently testing GPS)
+            LoRaTX();                 //      <=== appears to get stuck in this function call in debug mode. (commenting out as i'm currently testing GPS)
         } 
     }
 
@@ -1540,19 +1593,28 @@ int main(void) {
     gpioUnlock();                       // Unlock GPIO
     ConfigPeripheral();                 // Config Peripherals
     
-    ConfigBMPI2C();
-    CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
-    ConfigACCLI2C();
+    //ConfigBMPI2C();
+    //CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
+    //ConfigACCLI2C();
 
     __enable_interrupt();               // enable interrupts
 
+    // while(1){
+    //     ProcessBMPDataI2C();       // Read sensors 
+    //     UpdateFlightStateI2C();    // Update state 
+    //     // read sensors (ProcessBMPDataI2C())
+    //     // update state (UpdateFlightStateI2C())
+    //     // behaviour (RunStateBehaviour())
+    // }
+
     while(1){
-        ProcessBMPDataI2C();       // Read sensors 
-        UpdateFlightStateI2C();    // Update state 
-        // read sensors (ProcessBMPDataI2C())
-        // update state (UpdateFlightStateI2C())
-        // behaviour (RunStateBehaviour())
+        TransmitGPS();
     }
+
+
+
+
+    // =================================//
     
 
     /*
