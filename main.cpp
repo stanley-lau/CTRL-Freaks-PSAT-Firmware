@@ -1299,6 +1299,74 @@ void format_coord(char* buffer, int whole, int frac) {
 }
 
 
+// OPUS
+static inline void append_char(char **p, char c) {
+    **p = c; (*p)++;
+}
+
+static inline void append_str(char **p, const char *s) {
+    while (*s) { **p = *s++; (*p)++; }
+}
+
+static void append_uint_pad(char **p, uint16_t v, uint8_t min_width) {
+    char tmp[8];
+    int8_t i = 0;
+    if (v == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (v > 0) {
+            tmp[i++] = '0' + (v % 10);
+            v /= 10;
+        }
+    }
+    while (i < min_width) tmp[i++] = '0';
+    for (int8_t j = i - 1; j >= 0; --j) append_char(p, tmp[j]);
+}
+
+static void append_coordinate(char **p, double val, uint8_t frac_digits) {
+    // Handle negative
+    if (val < 0.0) {
+        append_char(p, '-');
+        val = -val;
+    }
+    
+    // Split into whole and fractional parts
+    uint32_t whole = (uint32_t)val;
+    
+    // Calculate fractional part scaled to desired digits
+    double frac_float = val - (double)whole;
+    uint32_t scale = 1;
+    for (uint8_t i = 0; i < frac_digits; i++) scale *= 10;
+    uint32_t frac = (uint32_t)(frac_float * scale + 0.5);  // Round
+    
+    // Handle rounding overflow (e.g., 0.999999 -> 1.000000)
+    if (frac >= scale) {
+        whole++;
+        frac = 0;
+    }
+    
+    // Append whole part
+    char tmp[12];
+    int8_t i = 0;
+    if (whole == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (whole > 0) {
+            tmp[i++] = '0' + (whole % 10);
+            whole /= 10;
+        }
+    }
+    for (int8_t j = i - 1; j >= 0; --j) append_char(p, tmp[j]);
+    
+    // Append decimal point
+    append_char(p, '.');
+    
+    // Append fractional part with leading zeros
+    append_uint_pad(p, (uint16_t)frac, frac_digits);
+}
+// OPUS END
+
+
 // ==================== LoRa =========================//
 /*
 LoRa code was written with the SPI_B1 moduel in mind. This corresponds to
@@ -1403,7 +1471,8 @@ void LoRaTX() {
     while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
     */
     
-    
+    /*
+    // we obtain partially good GPS data, -36.001 showing, but other param is showing junk.
     char data[128];  // Buffer for formatted GPS packet
 
     // Determine fix type character
@@ -1449,6 +1518,55 @@ void LoRaTX() {
 
 
     radio_transmit_start((uint8_t*)data, strlen(data), radioChipSelPin);
+    while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
+    */
+
+    char data[128];
+    char *p = data;
+    
+    // Copy volatile globals safely
+    uint8_t sats = gps_sats;
+    double lat = latitude;
+    double lon = longitude;
+    
+    // Determine fix type
+    char fix_type = (sats == 0) ? 'N' : 'G';
+    if (sats > 15) sats = 15;
+    
+    // Build packet: #E 00:00:00 UTC; Y; ZZ; LAT,LON; 0.0m\n
+    append_char(&p, '#');
+    append_char(&p, 'E');
+    append_char(&p, ' ');
+    
+    // Time placeholder
+    append_str(&p, "00:00:00 UTC; ");
+    
+    // Fix type
+    append_char(&p, fix_type);
+    append_str(&p, "; ");
+    
+    // Satellite count (2 digits, zero padded)
+    append_uint_pad(&p, sats, 2);
+    append_str(&p, "; ");
+    
+    // Coordinates
+    if (sats > 0) {
+        append_coordinate(&p, lat, 6);
+        append_char(&p, ',');
+        append_coordinate(&p, lon, 6);
+    } else {
+        append_str(&p, "0.000000,0.000000");
+    }
+    
+    // Altitude placeholder
+    append_str(&p, "; 0.0m\n");
+    
+    // Null terminate
+    *p = '\0';
+    
+    // Transmit
+    uint16_t len = (uint16_t)(p - data);
+    radio_transmit_start((uint8_t*)data, len, radioChipSelPin);
     while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
 
 }
