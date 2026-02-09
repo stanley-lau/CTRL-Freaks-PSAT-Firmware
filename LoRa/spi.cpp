@@ -24,7 +24,7 @@ void spi_B1_init(void){
 
     // ADDED - 16Mhz init in main loop, but i believe this code assumes 1Mhz
     // Set baud rate for 16 MHz SMCLK
-    // Target SPI clock: 1 MHz (safe for most LoRa modules)
+    // Target SPI clock: 1 MHz (safe for most LoRa modules)/
     // 16 MHz / 16 = 1 MHz
     UCB1BRW = 16;
 
