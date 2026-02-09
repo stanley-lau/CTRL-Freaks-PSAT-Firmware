@@ -946,6 +946,7 @@ volatile uint8_t gps_line_ready = 0;
 double longitude = 0.0;
 double latitude = 0.0;
 uint8_t gps_sats = 0;
+char gps_time[10] = "00:00:00"; // HH:MM:SS
 
 /*
 Connect:
@@ -1200,7 +1201,28 @@ void parse_gngga(char *line) {
     while (token) {
         field++;
 
-        if (field == 3) lat_raw = atof(token);
+        if (field == 2) {
+            // Parse time field (hhmmss.ss)
+            int hh = 0, mm = 0, ss = 0;
+            if (strlen(token) >= 6) {
+                hh = (token[0] - '0') * 10 + (token[1] - '0');
+                mm = (token[2] - '0') * 10 + (token[3] - '0');
+                ss = (token[4] - '0') * 10 + (token[5] - '0');
+                // Format as HH:MM:SS
+                gps_time[0] = '0' + (hh / 10);
+                gps_time[1] = '0' + (hh % 10);
+                gps_time[2] = ':';
+                gps_time[3] = '0' + (mm / 10);
+                gps_time[4] = '0' + (mm % 10);
+                gps_time[5] = ':';
+                gps_time[6] = '0' + (ss / 10);
+                gps_time[7] = '0' + (ss % 10);
+                gps_time[8] = '\0';
+            } else {
+                strcpy(gps_time, "00:00:00");
+            }
+        }
+        else if (field == 3) lat_raw = atof(token);
         else if (field == 4) ns = token[0];
         else if (field == 5) lon_raw = atof(token);
         else if (field == 6) ew = token[0];
@@ -1539,7 +1561,9 @@ void LoRaTX() {
     append_char(&p, ' ');
     
     // Time placeholder
-    append_str(&p, "00:00:00 UTC; ");
+    //append_str(&p, "00:00:00 UTC; ");
+    append_str(&p, gps_time);
+    append_str(&p, " UTC; ");
     
     // Fix type
     append_char(&p, fix_type);
