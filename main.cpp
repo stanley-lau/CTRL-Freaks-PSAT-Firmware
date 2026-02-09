@@ -940,9 +940,12 @@ __interrupt void Timer3_B0_ISR(void)
 volatile char gps_buffer[GPS_BUFFER_SIZE];
 volatile uint8_t gps_index = 0;
 volatile uint8_t gps_line_ready = 0;
-volatile double longitude = 0.0;
-volatile double latitude = 0.0;
-volatile uint8_t gps_sats = 0;
+// volatile double longitude = 0.0;
+// volatile double latitude = 0.0;
+// volatile uint8_t gps_sats = 0;
+double longitude = 0.0;
+double latitude = 0.0;
+uint8_t gps_sats = 0;
 
 /*
 Connect:
@@ -1215,10 +1218,86 @@ void parse_gngga(char *line) {
     latitude = lat;
     longitude = lon;
     gps_sats = sats;
-
-    // store / transmit lat & lon
-    __no_operation();
 }
+
+// Helper function to convert integer to string manually
+void int_to_str(char* buf, int32_t val) {
+    char tmp[12];
+    int i = 0;
+    int is_neg = 0;
+    
+    if (val < 0) {
+        is_neg = 1;
+        val = -val;
+    }
+    
+    if (val == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (val > 0) {
+            tmp[i++] = '0' + (val % 10);
+            val /= 10;
+        }
+    }
+    
+    int pos = 0;
+    if (is_neg) buf[pos++] = '-';
+    
+    for (int j = i - 1; j >= 0; j--) {
+        buf[pos++] = tmp[j];
+    }
+    buf[pos] = '\0';
+}
+
+// Helper function to pad fractional part with zeros
+void format_coord(char* buffer, int whole, int frac) {
+    // Ensure frac is positive and within valid range
+    if (frac < 0) frac = -frac;
+    if (frac > 999999) frac = 999999;
+    
+    int pos = 0;
+    
+    // Add whole part using manual conversion
+    char whole_str[12];
+    int_to_str(whole_str, whole);
+    int i = 0;
+    while (whole_str[i] != '\0') {
+        buffer[pos++] = whole_str[i++];
+    }
+    
+    // Add decimal point
+    buffer[pos++] = '.';
+    
+    // Calculate leading zeros needed
+    int temp = frac;
+    int len = 0;
+    if (temp == 0) {
+        len = 1;
+    } else {
+        while (temp > 0) {
+            temp /= 10;
+            len++;
+        }
+    }
+    int zeros_needed = 6 - len;
+    
+    // Add leading zeros
+    for (int k = 0; k < zeros_needed; k++) {
+        buffer[pos++] = '0';
+    }
+    
+    // Add fractional part
+    char frac_str[8];
+    int_to_str(frac_str, frac);
+    i = 0;
+    while (frac_str[i] != '\0') {
+        buffer[pos++] = frac_str[i++];
+    }
+    
+    // Null terminate
+    buffer[pos] = '\0';
+}
+
 
 // ==================== LoRa =========================//
 /*
@@ -1284,6 +1363,8 @@ void LoRaTX() {
     */
 
     
+    /*
+    // working, gets "6f" when fixed for LAT LON
     // Alternatively, we can rewrite the above so that it sends ASCII which is decipherable by our Ground station
     char data[128];  // Buffer for formatted GPS packet
     
@@ -1320,8 +1401,55 @@ void LoRaTX() {
     
     radio_transmit_start((uint8_t*)data, strlen(data), radioChipSelPin);
     while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
+    */
     
     
+    char data[128];  // Buffer for formatted GPS packet
+
+    // Determine fix type character
+    char fix_type;
+    if (gps_sats == 0) {
+        fix_type = 'N';  // No fix
+    } else {
+        fix_type = 'G';  // GPS fix
+    }
+
+    // Ensure satellite count is within valid range (00-15)
+    uint8_t sat_count = (gps_sats > 15) ? 15 : gps_sats;
+
+    if (gps_sats > 0) {
+        int32_t lat_whole = (int32_t)latitude;
+        int32_t lon_whole = (int32_t)longitude;
+        
+        // Calculate fractional part - handle negative coordinates properly
+        double lat_frac_float = latitude - (double)lat_whole;
+        double lon_frac_float = longitude - (double)lon_whole;
+        
+        // Make fractional part positive
+        if (lat_frac_float < 0) lat_frac_float = -lat_frac_float;
+        if (lon_frac_float < 0) lon_frac_float = -lon_frac_float;
+        
+        int32_t lat_frac = (int32_t)(lat_frac_float * 1000000);
+        int32_t lon_frac = (int32_t)(lon_frac_float * 1000000);
+        
+        // Ensure fractions are positive
+        if (lat_frac < 0) lat_frac = -lat_frac;
+        if (lon_frac < 0) lon_frac = -lon_frac;
+        
+        // Initialize buffers to be safe
+        char lat_str[16] = {0};
+        char lon_str[16] = {0};
+        
+        format_coord(lat_str, (int)lat_whole, (int)lat_frac);
+        format_coord(lon_str, (int)lon_whole, (int)lon_frac);
+        
+        sprintf(data, "#E 00:00:00 UTC; %c; %02d; %s,%s; 0.0m\n",
+                fix_type, sat_count, lat_str, lon_str);
+    }
+
+
+    radio_transmit_start((uint8_t*)data, strlen(data), radioChipSelPin);
+    while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
 
 }
 
@@ -1386,7 +1514,7 @@ void TransmitGPS(){
         if (is_gngga((char*)gps_buffer)) {
 
             parse_gngga((char*)gps_buffer);
-            LoRaTX();                 //      <=== appears to get stuck in this function call in debug mode. (commenting out as i'm currently testing GPS)
+            LoRaTX(); 
         } 
     }
 
