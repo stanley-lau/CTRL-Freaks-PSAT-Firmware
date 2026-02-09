@@ -989,21 +989,6 @@ void InitGPSUART(){
     // Select SMCLK as clock source
     UCA0CTLW0 |= UCSSEL__SMCLK;
 
-    // 9600 baud, SMCLK = 16 MHz, oversampling
-    // UCA0BRW = 104;                       // 16 MHz / 9600 / 16
-    // UCA0MCTLW = UCOS16 | (2 << 4) | 0xD600; // Oversampling, UCBRF=2, UCBRS=0xD6
-
-    // // Baud rate 115200, SMCLK = 16MHz, oversampling (FOR PDR GPS)
-    // UCA0BRW = 8;                   // Integer part
-    // UCA0MCTLW = UCOS16 | (11 << 4) | 0xD600; // UCBRFx = 11, UCBRSx = 0xD6
-
-
-    // Aidens code
-    // SET_BIT(UCA0MCTLW, (UCOS16_1 << 0), (UCOS16_1 << 0));
-    // SET_BIT(UCA0BRW, (0xffff), 8);
-    // SET_BIT(UCA0MCTLW, (0b1111 << 4), (10 << 4));
-    // SET_BIT(UCA0MCTLW, (0xff << 8), (0xf7 << 8));
-
     // // 115200 baud @ 16MHz (working 115200 baud for beacon)
     UCA0BRW   = 8;
     UCA0MCTLW = UCOS16 | (10 << 4) | (0xF7 << 8);
@@ -1021,15 +1006,9 @@ volatile bool GPS_enable = false;
 #pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
 __interrupt void EUSCI_A0_ISR(void){
 
-    // Ignore incoming bytes unless GPS reads are enabled
-    // if (!GPS_enable) {
-    //     return;
-    // }
-
-    P1OUT ^= BIT0;              // Toggle LED for debugging
+    //P1OUT ^= BIT0;              // Toggle LED for debugging
     char received = UCA0RXBUF;
     
-    // GPS MODULE WORKING
     // Only store printable characters, comma, and newline
     if ((received >= 32 && received <= 126) || received == ',' || received == '\n') {
         if (gps_index < GPS_BUFFER_SIZE - 1) {
@@ -1047,31 +1026,10 @@ __interrupt void EUSCI_A0_ISR(void){
         __bic_SR_register_on_exit(CPUOFF);
     }
     
-    
-    /*
-    // Store Everything TESTING for Beacon:
-    gps_buffer[gps_index++] = received;
-    if (gps_index >= GPS_BUFFER_SIZE) {
-        gps_index = 0;
-    }
-
-    if (received == '\n') {
-        gps_buffer[gps_index] = '\0';
-        gps_index = 0;
-        gps_line_ready = 1;
-        __bic_SR_register_on_exit(CPUOFF);
-    }
-    */
-    
 }
 
 void InitClock16MHz(void){
-    // CSCTL0_H = 0xA5;          // Unlock CS registers
-    // CSCTL1 = 0x0040;          // DCO = 16 MHz
-    // CSCTL2 = 0x0033;          // SMCLK = MCLK = DCO
-    // CSCTL3 = 0x0000;          // No division
-    // CSCTL0_H = 0x00;          // Lock CS registers
-
+    
     __bis_SR_register(SCG0);                 // disable FLL
     CSCTL3 |= SELREF__REFOCLK;               // Set REFO as FLL reference source
     CSCTL1 = DCOFTRIMEN_1 | DCOFTRIM0 | DCOFTRIM1 | DCORSEL_5;// DCOFTRIM=3, DCO Range = 16MHz
@@ -1182,11 +1140,7 @@ double nmea_to_decimal(double coord, char hemi) {
 }
 
 void parse_gngga(char *line) {
-    // gngas check has been moved to main
-    // if (!is_gngga(line)){
-    //     return;
-    // }
-    
+
     char *token;
     uint8_t field = 0;
 
@@ -1196,8 +1150,10 @@ void parse_gngga(char *line) {
     uint8_t fix = 0;
     uint8_t sats = 0;
 
+    // Seperate sentence
     token = strtok(line, ",");
 
+    // Locate relevant sections of GNNGA sentence
     while (token) {
         field++;
 
@@ -1232,7 +1188,7 @@ void parse_gngga(char *line) {
         token = strtok(NULL, ",");
     }
 
-    //if (fix == 0) return;   // no GPS fix
+    //if (fix == 0)return;   // no GPS fix
 
     double lat = nmea_to_decimal(lat_raw, ns);
     double lon = nmea_to_decimal(lon_raw, ew);
@@ -1242,94 +1198,17 @@ void parse_gngga(char *line) {
     gps_sats = sats;
 }
 
-// Helper function to convert integer to string manually
-void int_to_str(char* buf, int32_t val) {
-    char tmp[12];
-    int i = 0;
-    int is_neg = 0;
-    
-    if (val < 0) {
-        is_neg = 1;
-        val = -val;
-    }
-    
-    if (val == 0) {
-        tmp[i++] = '0';
-    } else {
-        while (val > 0) {
-            tmp[i++] = '0' + (val % 10);
-            val /= 10;
-        }
-    }
-    
-    int pos = 0;
-    if (is_neg) buf[pos++] = '-';
-    
-    for (int j = i - 1; j >= 0; j--) {
-        buf[pos++] = tmp[j];
-    }
-    buf[pos] = '\0';
-}
-
-// Helper function to pad fractional part with zeros
-void format_coord(char* buffer, int whole, int frac) {
-    // Ensure frac is positive and within valid range
-    if (frac < 0) frac = -frac;
-    if (frac > 999999) frac = 999999;
-    
-    int pos = 0;
-    
-    // Add whole part using manual conversion
-    char whole_str[12];
-    int_to_str(whole_str, whole);
-    int i = 0;
-    while (whole_str[i] != '\0') {
-        buffer[pos++] = whole_str[i++];
-    }
-    
-    // Add decimal point
-    buffer[pos++] = '.';
-    
-    // Calculate leading zeros needed
-    int temp = frac;
-    int len = 0;
-    if (temp == 0) {
-        len = 1;
-    } else {
-        while (temp > 0) {
-            temp /= 10;
-            len++;
-        }
-    }
-    int zeros_needed = 6 - len;
-    
-    // Add leading zeros
-    for (int k = 0; k < zeros_needed; k++) {
-        buffer[pos++] = '0';
-    }
-    
-    // Add fractional part
-    char frac_str[8];
-    int_to_str(frac_str, frac);
-    i = 0;
-    while (frac_str[i] != '\0') {
-        buffer[pos++] = frac_str[i++];
-    }
-    
-    // Null terminate
-    buffer[pos] = '\0';
-}
-
-
-// OPUS
+// append_char() appends a character to the current position of a character pointer and then advances the pointer to the next position.
 static inline void append_char(char **p, char c) {
     **p = c; (*p)++;
 }
 
+// append_str() copies a string into a buffer
 static inline void append_str(char **p, const char *s) {
     while (*s) { **p = *s++; (*p)++; }
 }
 
+// append_uint_pad() turns a number into text, pads it with leading zeros if needed, and appends it to a buffer.
 static void append_uint_pad(char **p, uint16_t v, uint8_t min_width) {
     char tmp[8];
     int8_t i = 0;
@@ -1345,6 +1224,7 @@ static void append_uint_pad(char **p, uint16_t v, uint8_t min_width) {
     for (int8_t j = i - 1; j >= 0; --j) append_char(p, tmp[j]);
 }
 
+// append_coordinate() converts a floating-point coordinate into text with a fixed number of decimal places and appends it to a buffer.
 static void append_coordinate(char **p, double val, uint8_t frac_digits) {
     // Handle negative
     if (val < 0.0) {
@@ -1361,7 +1241,7 @@ static void append_coordinate(char **p, double val, uint8_t frac_digits) {
     for (uint8_t i = 0; i < frac_digits; i++) scale *= 10;
     uint32_t frac = (uint32_t)(frac_float * scale + 0.5);  // Round
     
-    // Handle rounding overflow (e.g., 0.999999 -> 1.000000)
+    // Handle rounding overflow (like 0.999999 -> 1.000000)
     if (frac >= scale) {
         whole++;
         frac = 0;
@@ -1386,7 +1266,6 @@ static void append_coordinate(char **p, double val, uint8_t frac_digits) {
     // Append fractional part with leading zeros
     append_uint_pad(p, (uint16_t)frac, frac_digits);
 }
-// OPUS END
 
 
 // ==================== LoRa =========================//
@@ -1401,7 +1280,7 @@ All these pins are broken out on the DEV board which means we can use them tempo
 
 */
 
-#define MESSAGE {'H','e','l','l','o'}
+//#define MESSAGE {'H','e','l','l','o'}
 #define PREAMBLE_LENGTH 8
 #define TIMEOUT_IN_SYMBOLS 1023 //max timeout
 
@@ -1412,135 +1291,13 @@ GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
 void LoRaTX() {
 
     /*
-    // Working hard coded independent LoRa
+    // Default hard code tesd
     uint8_t data[] = MESSAGE;
     while(1){
         radio_transmit_start(data, 5, radioChipSelPin);
 
         while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
     }
-    */
-
-    /*
-    // Able to transmit one packet of data when we grab one GNGGA sentence.
-    uint8_t data[] = MESSAGE;
-    radio_transmit_start(data, 5, radioChipSelPin);
-
-    while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
-    */
-
-    
-    /*
-    // On ground station, this appears as: "Recieved (8 bytes): [blank here]" bc its sending as binary 4-byte integers, not as ASCII. Ground station needs to be set up to receive and parse this correctly.
-    // binary method (your current approach) is more efficient
-    // Send latitude and longitude as 4-byte signed integers scaled by 1e7.
-    // If no GPS fix, transmit 0,0.
-    int32_t lat_i = 0;
-    int32_t lon_i = 0;
-
-    bool has_fix = (gps_sats > 0);
-    if (has_fix) {
-        lat_i = (int32_t)(latitude * 1e7);
-        lon_i = (int32_t)(longitude * 1e7);
-    }
-
-    uint8_t data[8];
-    memcpy(&data[0], &lat_i, sizeof(int32_t));
-    memcpy(&data[4], &lon_i, sizeof(int32_t));
-
-    radio_transmit_start(data, sizeof(data), radioChipSelPin);
-    while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
-    */
-
-    
-    /*
-    // working, gets "6f" when fixed for LAT LON
-    // Alternatively, we can rewrite the above so that it sends ASCII which is decipherable by our Ground station
-    char data[128];  // Buffer for formatted GPS packet
-    
-    // Determine fix type character
-    char fix_type;
-    if (gps_sats == 0) {
-        fix_type = 'N';  // No fix
-    } else {
-        fix_type = 'G';  // GPS fix (assuming standard GPS, not DGPS)
-    }
-    
-    // Ensure satellite count is within valid range (00-15)
-    uint8_t sat_count = (gps_sats > 15) ? 15 : gps_sats;
-    
-    // Format packet according to protocol:
-    // #C XX:XX:XX UTC; Y; ZZ; -XXX.XXXXX,-XXX.XXXXX; XXXXX.Xm\n
-    // Using 'E' as team identifier (you can change this)
-    // Time set to 00:00:00 as placeholder (you'll need to extract from GPS if needed)
-    // Altitude set to 0.0m as placeholder (you'll need BMP data for actual altitude)
-    
-    if (gps_sats > 0) {
-        // Has GPS fix - send actual coordinates
-        sprintf(data, "#E 00:00:00 UTC; %c; %02d; %.6f,%.6f; 0.0m\n",
-                fix_type,
-                sat_count,
-                latitude,
-                longitude);
-    } else {
-        // No fix - send zeros
-        sprintf(data, "#E 00:00:00 UTC; %c; %02d; 0.000000,0.000000; 0.0m\n",
-                fix_type,
-                sat_count);
-    }
-    
-    radio_transmit_start((uint8_t*)data, strlen(data), radioChipSelPin);
-    while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
-    */
-    
-    /*
-    // we obtain partially good GPS data, -36.001 showing, but other param is showing junk.
-    char data[128];  // Buffer for formatted GPS packet
-
-    // Determine fix type character
-    char fix_type;
-    if (gps_sats == 0) {
-        fix_type = 'N';  // No fix
-    } else {
-        fix_type = 'G';  // GPS fix
-    }
-
-    // Ensure satellite count is within valid range (00-15)
-    uint8_t sat_count = (gps_sats > 15) ? 15 : gps_sats;
-
-    if (gps_sats > 0) {
-        int32_t lat_whole = (int32_t)latitude;
-        int32_t lon_whole = (int32_t)longitude;
-        
-        // Calculate fractional part - handle negative coordinates properly
-        double lat_frac_float = latitude - (double)lat_whole;
-        double lon_frac_float = longitude - (double)lon_whole;
-        
-        // Make fractional part positive
-        if (lat_frac_float < 0) lat_frac_float = -lat_frac_float;
-        if (lon_frac_float < 0) lon_frac_float = -lon_frac_float;
-        
-        int32_t lat_frac = (int32_t)(lat_frac_float * 1000000);
-        int32_t lon_frac = (int32_t)(lon_frac_float * 1000000);
-        
-        // Ensure fractions are positive
-        if (lat_frac < 0) lat_frac = -lat_frac;
-        if (lon_frac < 0) lon_frac = -lon_frac;
-        
-        // Initialize buffers to be safe
-        char lat_str[16] = {0};
-        char lon_str[16] = {0};
-        
-        format_coord(lat_str, (int)lat_whole, (int)lat_frac);
-        format_coord(lon_str, (int)lon_whole, (int)lon_frac);
-        
-        sprintf(data, "#E 00:00:00 UTC; %c; %02d; %s,%s; 0.0m\n",
-                fix_type, sat_count, lat_str, lon_str);
-    }
-
-
-    radio_transmit_start((uint8_t*)data, strlen(data), radioChipSelPin);
-    while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
     */
 
     char data[128];
@@ -1779,11 +1536,6 @@ void RecoveryMode(void) {
     }
 }
 
-// Stop Watching first:
-
-// Call 16mhz clock setup
-// Software Trim()
-
 // InitGPIO() initialises all GPIO pins
 void InitGPIO(){
     InitCoilGPIO();                 // P5.1
@@ -1835,21 +1587,7 @@ void ConfigPeripheral(){
 }
 
 
-/*
-    Subsystems list;
-    coil pwm    done and tested
-    fan pwm     done and tested
-    bmp         
-    accl
-    adc         done and tested
-    gps         done and tested
-    lora        done
-    sd card
-    background timer    done
-    regulator enable    done
-
-*/
-// ==================== Main Flight Loop =========================//
+// ==================== Main Flight Loop (Start) =========================//
 
 
 int main(void) {
@@ -1877,29 +1615,17 @@ int main(void) {
     //     // behaviour (RunStateBehaviour())
     // }
 
+    // Testing:
     while(1){
         TransmitGPS();
     }
-
-
-
-
-    // =================================//
     
-
-    /*
-    To do:
-    - integrate/split sensor initialisation code to fit into InitGPIO() and Config() for main()
-    - test sensors after integration
-    - test GPS + LoRa Integration
-    - test recovery
-    - test entire flight loop
-
-    - what code to run/change to test sensors with kyle's bmp module?
-    */
+}
 
 
 
+// ==================== Main Flight Loop (END) =========================//
+    
     /*
     // Main function. Reading pressure data in Pascals from BMP then using it in UpdateFlightState. 
     volatile float pressure;
@@ -2187,47 +1913,17 @@ int main(void) {
     
     LoRaTX(); 
     */
-    
-    
 
+/*
+    Subsystems list;
+    coil pwm    done and tested
+    fan pwm     done and tested
+    bmp         done and tested
+    accl        done and tesded
+    adc         done and tested
+    gps         done and tested
+    lora        done and tested
+    background timer    done and tested
+    regulator enable    done
 
-
-    /*
-    // GPS + LoRa integration WORK IN PROGRES
-
-    WDTCTL = WDTPW | WDTHOLD;   // Stop Watchdog timer
-    InitClock16MHz();           // Init 16mhz clock
-    Software_Trim();            // Handle clock drift 
-    P1DIR |= BIT0;              // RED LED as output
-    P1OUT &= ~BIT0;             // Turn RED LED off
-
-    InitLoRaGPIO();             // Init LoRa GPIO pins
-    spi_B1_init();              // Init SPI module for LoRa
-    lora_configure(
-            BANDWIDTH125K,              // 125 khz
-            CODINGRATE4_5,              // Coding rate 4/5
-            CRC_ENABLE,                 // Enable CRC
-            EXPLICIT_HEADER_MODE,       // Explicit header
-            POLARITY_NORMAL_MODE,       // Normal IQ
-            PREAMBLE_LENGTH,            // Preamble 8
-            SPREADINGFACTOR128,         // SF7
-            SYNC_WORD_RESET,            // 0x12
-            radioChipSelPin
-    );                          // Configure LoRa
-
-    ClearGPSBuffer();           // Clear GPS buffer
-
-    GPS_enable = true;
-    InitGPSUART();              // Init GPS (GPIO + UART module) Once this function is called, the ISR will be called IMMEDIATELY
-    PM5CTL0 &= ~LOCKLPM5;
-
-    while(1){
-        TransmitGPS();
-    }
-    */
-    
-
-
-
-    
-} 
+*/
