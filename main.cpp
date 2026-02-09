@@ -698,13 +698,14 @@ void UpdateFlightStateI2C() {
     delta_i2c = (fabsf(delta_i2c));
     
     
-    UpdateACCLStatusI2C();
+    //UpdateACCLStatusI2C();
 
     if (!accl_data_ready_i2c) {
         return;
     }
 
-    float accl_magnitude = ReadACCLI2C();
+    //float accl_magnitude = ReadACCLI2C();
+    float accl_magnitude = 0; 
     
     OverallAltitudeDeltaI2C(&OverallAltitudeChangeI2C);
     OverallAltitudeChangeI2C = (fabsf(OverallAltitudeChangeI2C));
@@ -1375,11 +1376,11 @@ void RecoveryMode(void) {
     DisableBMP();
     DisableACCL();
 
-    InitCoilPWM(); 
-    InitFanPWM();
+    // InitCoilPWM(); 
+    // InitFanPWM();
 
-    ConfigBackgroundTimer();
-    __enable_interrupt();
+    // ConfigBackgroundTimer();
+    // __enable_interrupt();
     
     start_delay_seconds(450); // Initial 7.5 minute delay
 
@@ -1467,12 +1468,11 @@ void InitGPIO(){
     InitADCRef();
     InitADCGPIO();                  // P5.0, P5.2, P5.3
     InitRegulatorGPIO();            // P3.5
+
+    InitSensorsGPIO();
     
     InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
     InitGPSGPIO();                  // P1.6, P1.7
-
-    InitSensorsGPIO();
-
 }
 
 void InitOnboardLEDS(){
@@ -1493,6 +1493,8 @@ void ConfigPeripheral(){
     ConfigFanPWM();
     ConfigADC();
     
+    ConfigSensorsI2C();
+
     ConfigBackgroundTimer();
     spi_B1_init();          // "ConfigLoRaSPI"
     lora_configure(
@@ -1507,8 +1509,6 @@ void ConfigPeripheral(){
             radioChipSelPin
     );
     ConfigGPSUART();
-
-    ConfigSensorsI2C();
 }
 
 
@@ -1530,7 +1530,7 @@ void ConfigPeripheral(){
 
 
 int main(void) {
-    /*
+    
     WDTCTL = WDTPW | WDTHOLD;           // Stop Watchdog Timer
 
     InitClock16MHz();                   // Init 16Mhz CLK
@@ -1539,17 +1539,21 @@ int main(void) {
     InitGPIO();                         // Init all GPIO
     gpioUnlock();                       // Unlock GPIO
     ConfigPeripheral();                 // Config Peripherals
+    
     ConfigBMPI2C();
+    CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
     ConfigACCLI2C();
 
     __enable_interrupt();               // enable interrupts
 
     while(1){
+        ProcessBMPDataI2C();       // Read sensors 
+        UpdateFlightStateI2C();    // Update state 
         // read sensors (ProcessBMPDataI2C())
         // update state (UpdateFlightStateI2C())
         // behaviour (RunStateBehaviour())
     }
-    */
+    
 
     /*
     To do:
@@ -1569,8 +1573,11 @@ int main(void) {
     volatile float pressure;
     WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. 
 
+    InitSensorsGPIO();
+    ConfigSensorsI2C();
+    ConfigBMPI2C();
     CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c); 
-    ConfigureACCLI2C();
+    //ConfigACCLI2C();
 
     while (1) {
         ProcessBMPDataI2C(); 
