@@ -1347,15 +1347,33 @@ void parse_gngga(char *line) {
 
         if (field == 2) {
             if (strlen(token) >= 6) {
-                gps_time[0] = token[0];
-                gps_time[1] = token[1];
+                // gps_time[0] = token[0];
+                // gps_time[1] = token[1];
+                // gps_time[2] = ':';
+                // gps_time[3] = token[2];
+                // gps_time[4] = token[3];
+                // gps_time[5] = ':';
+                // gps_time[6] = token[4];
+                // gps_time[7] = token[5];
+                // gps_time[8] = '\0';
+
+                // below code is more modular in terms of time formatting:
+                int hh = (token[0] - '0') * 10 + (token[1] - '0');
+                int mm = (token[2] - '0') * 10 + (token[3] - '0');
+                int ss = (token[4] - '0') * 10 + (token[5] - '0');
+
+                // Add 12 hour offset and wrap around at 24
+                hh = (hh + 13) % 24;
+
+                gps_time[0] = '0' + (hh / 10);
+                gps_time[1] = '0' + (hh % 10);
                 gps_time[2] = ':';
-                gps_time[3] = token[2];
-                gps_time[4] = token[3];
+                gps_time[3] = '0' + (mm / 10);
+                gps_time[4] = '0' + (mm % 10);
                 gps_time[5] = ':';
-                gps_time[6] = token[4];
-                gps_time[7] = token[5];
-                gps_time[8] = '\0';
+                gps_time[6] = '0' + (ss / 10);
+                gps_time[7] = '0' + (ss % 10);
+                gps_time[8] = '\0';          
             }
         }
         else if (field == 3) lat_raw = parse_nmea_to_int(token);
