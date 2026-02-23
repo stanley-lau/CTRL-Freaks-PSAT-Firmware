@@ -1128,6 +1128,7 @@ static inline bool is_gngga(const char *s) {
             s[5] == 'A');
 }
 
+/* NOT needed for working LoRa
 double nmea_to_decimal(double coord, char hemi) {
     int deg = (int)(coord / 100.0);
     double min = coord - (deg * 100.0);
@@ -1197,6 +1198,7 @@ void parse_gngga(char *line) {
     longitude = lon;
     gps_sats = sats;
 }
+*/
 
 // append_char() appends a character to the current position of a character pointer and then advances the pointer to the next position.
 static inline void append_char(char **p, char c) {
@@ -1209,8 +1211,8 @@ static inline void append_str(char **p, const char *s) {
 }
 
 // append_uint_pad() turns a number into text, pads it with leading zeros if needed, and appends it to a buffer.
-static void append_uint_pad(char **p, uint16_t v, uint8_t min_width) {
-    char tmp[8];
+static void append_uint_pad(char **p, uint32_t v, uint8_t min_width) {
+    char tmp[12];  // Increased size for uint32_t
     int8_t i = 0;
     if (v == 0) {
         tmp[i++] = '0';
@@ -1268,6 +1270,140 @@ static void append_coordinate(char **p, double val, uint8_t frac_digits) {
 }
 
 
+// ==================== OPUS 4.6 ==================== ///
+// INT Approach
+
+// Store coordinates as integers (degrees * 1,000,000) to avoid float precision loss
+volatile int32_t latitude_i = 0;   // -36607300 means -36.607300
+volatile int32_t longitude_i = 0;  // 174690066 means 174.690066
+
+// Parse NMEA coord token directly to integer (degrees * 1,000,000)
+// Input: "3636.44029" (DDMM.MMMMM) or "17441.40395" (DDDMM.MMMMM)
+static int32_t parse_nmea_to_int(const char *token) {
+    if (token == NULL || token[0] == '\0') return 0;
+
+    // Find decimal point
+    const char *dot = token;
+    while (*dot && *dot != '.') dot++;
+    int dot_pos = (int)(dot - token);
+    if (dot_pos < 2) return 0;
+
+    // Parse integer part (DDMM or DDDMM)
+    int32_t int_part = 0;
+    for (int i = 0; i < dot_pos; i++) {
+        int_part = int_part * 10 + (token[i] - '0');
+    }
+
+    // Parse fractional part (up to 5 digits for minutes)
+    int32_t frac_part = 0;
+    int frac_digits = 0;
+    if (*dot == '.') {
+        const char *fp = dot + 1;
+        while (*fp >= '0' && *fp <= '9' && frac_digits < 5) {
+            frac_part = frac_part * 10 + (*fp - '0');
+            frac_digits++;
+            fp++;
+        }
+    }
+    while (frac_digits < 5) {
+        frac_part *= 10;
+        frac_digits++;
+    }
+
+    // Split degrees and minutes
+    int32_t degrees = int_part / 100;
+    int32_t minutes_int = int_part % 100;
+
+    // Total minutes * 100000 (integer)
+    // minutes_int is whole minutes, frac_part is fractional minutes * 10^5
+    int32_t total_min_scaled = (int32_t)minutes_int * 100000L + frac_part;
+
+    // Convert minutes to degrees:
+    // degrees_frac = total_min_scaled / 60
+    // This gives us fractional degrees * 100000 / 60
+    // We want result in millionths of a degree (10^6)
+    // result = degrees * 1000000 + (total_min_scaled * 10) / 60
+    // Because total_min_scaled is minutes * 10^5, multiply by 10 to get * 10^6, then /60
+
+    int32_t frac_deg = (total_min_scaled * 10L + 30L) / 60L;  // +30 for rounding
+
+    return degrees * 1000000L + frac_deg;
+}
+
+void parse_gngga(char *line) {
+    char *token;
+    uint8_t field = 0;
+
+    int32_t lat_raw = 0;
+    int32_t lon_raw = 0;
+    char ns = 0, ew = 0;
+    uint8_t fix = 0;
+    uint8_t sats = 0;
+
+    token = strtok(line, ",");
+
+    while (token) {
+        field++;
+
+        if (field == 2) {
+            if (strlen(token) >= 6) {
+                gps_time[0] = token[0];
+                gps_time[1] = token[1];
+                gps_time[2] = ':';
+                gps_time[3] = token[2];
+                gps_time[4] = token[3];
+                gps_time[5] = ':';
+                gps_time[6] = token[4];
+                gps_time[7] = token[5];
+                gps_time[8] = '\0';
+            }
+        }
+        else if (field == 3) lat_raw = parse_nmea_to_int(token);
+        else if (field == 4) ns = token[0];
+        else if (field == 5) lon_raw = parse_nmea_to_int(token);
+        else if (field == 6) ew = token[0];
+        else if (field == 7) fix = atoi(token);
+        else if (field == 8) sats = atoi(token);
+
+        token = strtok(NULL, ",");
+    }
+
+    latitude_i = (ns == 'S') ? -lat_raw : lat_raw;
+    longitude_i = (ew == 'W') ? -lon_raw : lon_raw;
+    gps_sats = sats;
+}
+
+// Append integer coordinate as decimal string: -36607300 -> "-36.607300"
+static void append_coord_int(char **p, int32_t val) {
+    if (val < 0) {
+        append_char(p, '-');
+        val = -val;
+    }
+
+    int32_t whole = val / 1000000L;
+    int32_t frac = val % 1000000L;
+
+    // Append whole part
+    char tmp[8];
+    int8_t i = 0;
+    if (whole == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (whole > 0) {
+            tmp[i++] = '0' + (whole % 10);
+            whole /= 10;
+        }
+    }
+    for (int8_t j = i - 1; j >= 0; --j) append_char(p, tmp[j]);
+
+    // Decimal point
+    append_char(p, '.');
+
+    // Append frac with leading zeros (always 6 digits)
+    append_uint_pad(p, (uint32_t)frac, 6);
+}
+// ====================  OPUS 4.6 ====================  ///
+
 // ==================== LoRa =========================//
 /*
 LoRa code was written with the SPI_B1 moduel in mind. This corresponds to
@@ -1287,69 +1423,65 @@ All these pins are broken out on the DEV board which means we can use them tempo
 // Chip Select pin
 GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
 
-// LoRa TX function
+// INT approach version of LoRaTX - uses integer coordinates to avoid floating point in packet construction. Packet format is the same, but lat and lon are sent as integers representing the value multiplied by 1e6 (ie 12.345678 -> 12345678). The append_coordinate function is replaced with a simpler append_coord_int that just appends the integer value with a decimal point inserted at the correct place in the receiver software. This should be more efficient on the MSP430 while still providing sufficient precision for GPS coordinates.
 void LoRaTX() {
 
-    /*
-    // Default hard code tesd
-    uint8_t data[] = MESSAGE;
-    while(1){
-        radio_transmit_start(data, 5, radioChipSelPin);
+    // // Default hard code tesd
+    // uint8_t data[] = MESSAGE;
+    // while(1){
+    //     radio_transmit_start(data, 5, radioChipSelPin);
 
-        while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
-    }
-    */
-
+    //     while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
+    // }
+    
     char data[128];
     char *p = data;
-    
+
     // Copy volatile globals safely
     uint8_t sats = gps_sats;
-    double lat = latitude;
-    double lon = longitude;
-    
+    int32_t lat = latitude_i;
+    int32_t lon = longitude_i;
+
     // Determine fix type
     char fix_type = (sats == 0) ? 'N' : 'G';
     if (sats > 15) sats = 15;
-    
+
     // Build packet: #E 00:00:00 UTC; Y; ZZ; LAT,LON; 0.0m\n
     append_char(&p, '#');
     append_char(&p, 'E');
     append_char(&p, ' ');
-    
-    // Time placeholder
-    //append_str(&p, "00:00:00 UTC; ");
+
+    // Time
     append_str(&p, gps_time);
     append_str(&p, " UTC; ");
-    
+
     // Fix type
     append_char(&p, fix_type);
     append_str(&p, "; ");
-    
+
     // Satellite count (2 digits, zero padded)
     append_uint_pad(&p, sats, 2);
     append_str(&p, "; ");
-    
+
     // Coordinates
     if (sats > 0) {
-        append_coordinate(&p, lat, 6);
+        append_coord_int(&p, lat);
         append_char(&p, ',');
-        append_coordinate(&p, lon, 6);
+        append_coord_int(&p, lon);
     } else {
         append_str(&p, "0.000000,0.000000");
     }
-    
+
     // Altitude placeholder
     append_str(&p, "; 0.0m\n");
-    
+
     // Null terminate
     *p = '\0';
-    
+
     // Transmit
     uint16_t len = (uint16_t)(p - data);
     radio_transmit_start((uint8_t*)data, len, radioChipSelPin);
     while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
-
 }
 
 // Loop until either we received a packet or the Rx operation times out
