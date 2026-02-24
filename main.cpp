@@ -37,7 +37,7 @@
 
 // ADC pins
 #define ADC_CHAM_THERM   ADCINCH_8    // P5.0 / A8
-#define ADC_BAT_THERM    ADCINCH_10   // P5.2 / A10
+#define ADC_BAT_THERM    ADCINCH_4   // P1.4 / A4
 #define ADC_CUR_SENSE    ADCINCH_11   // P5.3 / A11
 
 // UpdateFlightState
@@ -55,17 +55,6 @@
 #define GPS_BUFFER_SIZE 128
 
 // ==================== Interrupt Service Routines =========================//
-
-// BMP_Interrupt: Whenever an interrupt from Port 2 triggers, this code run to notify BMP Data is ready. 
-volatile bool bmp_data_ready = false;
-#pragma vector=PORT2_VECTOR
-__interrupt void PORT2_ISR(void) {
-    if (P2IFG & BIT4) {                     // If Bit4 on Port2 is set (BMP_INT)
-        bmp_data_ready = true;              // Signal main loop that BMP data is ready. 
-        P2IFG &= ~BIT4;                     // MUST clear flag
-    }
-}
-
 // ADC Interrupt: Interrupt that read ADC memory into a global variable
 volatile uint16_t adc_result;
 #pragma vector=ADC_VECTOR
@@ -83,11 +72,13 @@ __interrupt void ADC_ISR(void) {
     }
 }
 
-// ==================== Coil PWM =========================//
-
-
 // With the intention to tidy up the architecture main() should follow: InitGPIOs --> Unlock GPIO (ONCE) --> Configure Peripheral --> while(1) flightloop
-void InitCoilGPIO(){
+
+
+
+// ==================== Coil PWM =========================//
+// Initialise and config coil PWM for port 5.1 / timer 2.2
+void InitCoilGPIO() {
     // Setup Pins
     P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to output. BIT1 Corresponds to PIN1 on the Port.
     
@@ -95,7 +86,7 @@ void InitCoilGPIO(){
     P5SEL1 &= ~BIT1;    // Set BIT 1 of P5SEL1 = 0
 }
 
-void ConfigCoilPWM(){
+void ConfigCoilPWM() {
     // Setup Compare Reg
     TB2CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
     TB2CCR2 = 0;                                // 0% duty cycle
@@ -104,30 +95,6 @@ void ConfigCoilPWM(){
 
     // Setup Timer_B2
     TB2CTL =    TBCLR       |       TBSSEL_2    | MC_1;
-}
-
-
-// InitCoilPWM initialises PWM for Port P5.1 (PWM_Coil)
-// Avoid writing to TB2CTL after init
-void InitCoilPWM(){
-    // Setup Pins
-    P5DIR  |= BIT1;                             // Set BIT1 of P5DIR to output. BIT1 Corresponds to PIN1 on the Port.
-    
-    P5SEL0 |= BIT1;     // Set BIT 1 of P5SEL0 = 1
-    P5SEL1 &= ~BIT1;    // Set BIT 1 of P5SEL1 = 0
-    //Page 104 --> 01b = select timer Timer_B2
-    
-    PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO
-
-    // Setup Compare Reg
-    TB2CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
-    TB2CCR2 = 0;                                // 0% duty cycle
-    TB2CCTL2 = OUTMOD_7;                        // Reset/Set PWM mode, refer to YT vid
-    // TB2CCRn is the timer attached to Port P5 from Table 6-67
-
-    // Setup Timer_B2
-    TB2CTL =    TBCLR       |       TBSSEL_2    | MC_1;
-    //     = Clear Timer_B0 |  Set SMCLK as clk | Up-Mode: Count upwards
 }
 
 // SetCoilPWM sets the duty_cyle for the coil.
@@ -149,8 +116,8 @@ void SetCoilPWM(uint8_t duty_cycle) {
 }
 
 // ==================== Voltage Regulator Enable  =========================//
-
-void InitRegulatorGPIO(){
+// When PWM is turned on, voltage regulator also needs to be turned on  
+void InitRegulatorGPIO() {
     // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
     P3SEL0 &= ~BIT5;  
     P3SEL1 &= ~BIT5;
@@ -159,26 +126,13 @@ void InitRegulatorGPIO(){
     P3DIR |= BIT5;
 }
 
-void EnableRegulator(){
-    // Enable voltage regulator
-    P3OUT |= BIT5;
-}
-
-// This is just a combination of 2 prior functions. Can delete?
-// After turning on PWM, TurnOnRegulator is needed to turn on the voltage regulator
-void TurnOnRegulator() {
-    // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
-    P3SEL0 &= ~BIT5;  
-    P3SEL1 &= ~BIT5;
-
-    // REG_EN as output
-    P3DIR |= BIT5;
-
+void EnableRegulator() {
     // Enable voltage regulator
     P3OUT |= BIT5;
 }
 
 // ==================== Fan PWM =========================//
+// Initialise and config fan PWM for port 6.1 / timer 3.2
 void InitFanGPIO(){
     // Setup Pins
     P6DIR  |= BIT1;                             // Set BIT1 of P6DIR to output. 
@@ -189,28 +143,6 @@ void InitFanGPIO(){
 }
 
 void ConfigFanPWM(){
-    // Setup Compare Reg
-    TB3CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
-    TB3CCR2 = 0;                                // 0% duty cycle
-    TB3CCTL2 = OUTMOD_7;                        // Reset/Set PWM mode, refer to YT vid
-    // TB3CCRn is the timer attached to Port P6 from Table 6-68
-
-    // Setup Timer 3.2
-    TB3CTL =    TBCLR       |       TBSSEL_2    | MC_1;
-    //     = Clear Timer_B0 |  Set SMCLK as clk | Up-Mode: Count upwards
-}
-
-// InitFanPWM initialises PWM for Port P6.1 (FAN_Coil)
-void InitFanPWM(){
-    // Setup Pins
-    P6DIR  |= BIT1;                             // Set BIT1 of P6DIR to output. 
-
-    P6SEL0 |= BIT1;     // Set BIT 1 of P6SEL0 = 1
-    P6SEL1 &= ~BIT1;    // Set BIT 1 of P6SEL1 = 0
-    //Page 106 --> 01b = select timer Timer_B3.2
-
-    PM5CTL0 &= ~LOCKLPM5;                       // Unlock GPIO
-
     // Setup Compare Reg
     TB3CCR0 = PWM_PERIOD;                       // Roll-over from LOW to HIGH - Customise 
     TB3CCR2 = 0;                                // 0% duty cycle
@@ -294,8 +226,8 @@ Pin<P1,2> sda;
 I2cMaster<I2C_B0> i2c;
 
 // Slave addresses
-static const uint8_t BMP_ADDR  = 0x76; // Address could be 0x76 or 0x77 depending on pin 6.2 
-static const uint8_t ACCL_ADDR = 0x68; // Address is 0x68 if AP_AD0 is Low
+static const uint8_t BMP_ADDR  = 0x76; // Address is 0x76 since BMP_ADR is set to low 
+static const uint8_t ACCL_ADDR = 0x68; // Address is 0x68 since ACCL_ADR is set to low
 
 // Write a single byte to register
 void I2CWriteRegister(uint8_t devAddr, uint8_t reg, uint8_t val) {
@@ -319,8 +251,13 @@ uint8_t I2CReadRegister(uint8_t devAddr, uint8_t reg) {
 }
 
 void InitSensorsGPIO() {
-    // Set P6.2 to HIGH. --> address = 0x77
-    // Pin<P6, 2>::toOutput().setHigh(); 
+    // BMP_ADR on P6.2
+    P6DIR |= BIT2;     // Set as output
+    P6OUT &= ~BIT2;    // 0 = low (address 0x76)
+    
+    // IMU_ADR on P6.4
+    P6DIR |= BIT4;     // Set as output
+    P6OUT &= ~BIT4;    // 0 = low (address 0x68)
 
     sda.function(PinFunction::Primary);
     scl.function(PinFunction::Primary);
@@ -732,8 +669,6 @@ void UpdateFlightStateI2C() {
     }
 }
 
-
-
 // ==================== ADC =========================//
 
 // Initialise ADC for use. 
@@ -750,9 +685,9 @@ void InitADCGPIO(){
     P5SEL0 |= BIT0;
     P5SEL1 |= BIT0;
 
-    // P5.2 (Battery Thermister Temperature)
-    P5SEL0 |= BIT2;
-    P5SEL1 |= BIT2;
+    // P1.4 (Battery Thermister Temperature)
+    P1SEL0 |= BIT4;
+    P1SEL1 |= BIT4;
 
     // P5.3 (Current Sense Value)
     P5SEL0 |= BIT3;
@@ -878,8 +813,7 @@ volatile uint16_t delay_seconds = 0;
 volatile uint8_t timer_expired = 0;
 
 // Call the function to set an X second counter in the BACKGROUND
-void start_delay_seconds(uint16_t seconds)
-{
+void start_delay_seconds(uint16_t seconds) {
     __disable_interrupt();
     delay_seconds = seconds;
     timer_expired = 0;
@@ -887,8 +821,7 @@ void start_delay_seconds(uint16_t seconds)
 }
 
 // Initialise Timer_B for tick every 1 second. FKA: Timer3_init_1s_tick
-void ConfigBackgroundTimer()
-{
+void ConfigBackgroundTimer() {
     TB3CTL = TBSSEL__ACLK | MC__UP | TBCLR;
     TB3CCR0 = 32768 - 1;     // 1 second
     TB3CCTL0 = CCIE;
@@ -896,8 +829,7 @@ void ConfigBackgroundTimer()
 
 // ISR. Interrupt is called every second, decrementing delay time until 0. 
 #pragma vector = TIMER3_B0_VECTOR
-__interrupt void Timer3_B0_ISR(void)
-{
+__interrupt void Timer3_B0_ISR(void) {
     if (delay_seconds > 0)
     {
         delay_seconds--;
@@ -950,64 +882,47 @@ char gps_time[10] = "00:00:00"; // HH:MM:SS
 
 /*
 Connect:
+MSP430 4.2 (UART RX) --> GPS "TX" PIN
+MSP430 4.3 (UART TX) --> GPS "RX" PIN
+
+
+Old:
 MSP430 P1.6 (TEMP UART RX) <-- GPS "TX" PIN
 MSP430 P1.7 (TEMP UART TX) --> GPS "RX" PIN
+
+
 MSP430 3v3 -- GPS 3v3
 MSP430 GND -- GPS GND: 
 */
 
 void InitGPSGPIO(){
     // Configure pins for UART
-    P1SEL0 |= BIT6 | BIT7;   // RX + TX
-    P1SEL1 &= ~(BIT6 | BIT7);
+    P4SEL0 |= BIT2 | BIT3;   // RX + TX
+    P4SEL1 &= ~(BIT2 | BIT3);
     // TX not used  
 }
 
 void ConfigGPSUART(){
     // Configure UART
-    UCA0CTLW0 = UCSWRST;                // Put eUSCI in reset          
-    UCA0CTLW0 |= UCSSEL__SMCLK;         // Select SMCLK as clock source
-    UCA0BRW   = 8;
-    UCA0MCTLW = UCOS16 | (10 << 4) | (0xF7 << 8);           // // 115200 baud @ 16MHz (working 115200 baud for beacon)
+    UCA1CTLW0 = UCSWRST;                // Put eUSCI in reset          
+    UCA1CTLW0 |= UCSSEL__SMCLK;         // Select SMCLK as clock source
+    UCA1BRW   = 8;
+    UCA1MCTLW = UCOS16 | (10 << 4) | (0xF7 << 8);           // // 115200 baud @ 16MHz (working 115200 baud for beacon)
     
     // CRITICAL: Release UART from reset, enable interrupt, and unlock GPIO
-    UCA0CTLW0 &= ~UCSWRST;                  // Release eUSCI from reset
-    UCA0IE |= UCRXIE;                       // Enable RX interrupt
-}
-
-// Initialise UART pins for GPS
-void InitGPSUART(){
-    // Configure pins for UART
-    P1SEL0 |= BIT6 | BIT7;   // RX + TX
-    P1SEL1 &= ~(BIT6 | BIT7);
-    // TX not used
-
-    // Configure UART
-    // Put eUSCI in reset
-    UCA0CTLW0 = UCSWRST;              
-
-    // Select SMCLK as clock source
-    UCA0CTLW0 |= UCSSEL__SMCLK;
-
-    // // 115200 baud @ 16MHz (working 115200 baud for beacon)
-    UCA0BRW   = 8;
-    UCA0MCTLW = UCOS16 | (10 << 4) | (0xF7 << 8);
-    
-    // CRITICAL: Release UART from reset, enable interrupt, and unlock GPIO
-    UCA0CTLW0 &= ~UCSWRST;                  // Release eUSCI from reset
-    //PM5CTL0 &= ~LOCKLPM5;                   // Unlock GPIO - THis should be called ONCE in main after Inits:
-    UCA0IE |= UCRXIE;                       // Enable RX interrupt
+    UCA1CTLW0 &= ~UCSWRST;                  // Release eUSCI from reset
+    UCA1IE |= UCRXIE;                       // Enable RX interrupt
 }
 
 // Intialised GPS_enable boolean flag to prevent ISR code running redundantly when GPS reading is not required.
 volatile bool GPS_enable = false;
 
 // UART ISR
-#pragma vector = EUSCI_A0_VECTOR // UART RX Interrupt Vector
-__interrupt void EUSCI_A0_ISR(void){
+#pragma vector = EUSCI_A1_VECTOR // UART RX Interrupt Vector
+__interrupt void EUSCI_A1_ISR(void) {
 
     //P1OUT ^= BIT0;              // Toggle LED for debugging
-    char received = UCA0RXBUF;
+    char received = UCA1RXBUF;
     
     // Only store printable characters, comma, and newline
     if ((received >= 32 && received <= 126) || received == ',' || received == '\n') {
@@ -1528,17 +1443,17 @@ void InitLoRaGPIO() {
     P2OUT |= (BIT0 | BIT1 | BIT2);
 }
 
-void flash_led_red(void){
+void flash_led_red(void) {
     P2OUT ^= BIT0; // Toggle P2.0
     __delay_cycles(50000);
 }
 
-void flash_led_yellow_blue(void){
+void flash_led_yellow_blue(void) {
     P2OUT ^= BIT1; // Toggle P2.1
     __delay_cycles(50000);
 }
 
-void flash_led_green(void){
+void flash_led_green(void) {
     P2OUT ^= BIT2; // Toggle P2.2
     __delay_cycles(50000);
 }
@@ -1547,7 +1462,7 @@ void flash_led_green(void){
 
 // TransmitGPS assumes that the GPIO Pins, modules, and initialisations have been completed. This function should read GPS data, and transmit it over LoRa
 // The values [Lat, Lon] should be transmitted. [0, 0] should be transmittted when there is no fix. 
-void TransmitGPS(){
+void TransmitGPS() {
     //GPS_enable = true;                // Set true - include flag check in ISR!
 
     __bis_SR_register(GIE);             // Enable Interrupt
@@ -1555,7 +1470,7 @@ void TransmitGPS(){
 
         // Disable UART RX interrupt to prevent ISR corrupting gps_buffer during parse/transmit
         // Temporarily disbale GPS to prevent buffer from being overriden during transmission
-        UCA0IE &= ~UCRXIE;
+        UCA1IE &= ~UCRXIE;
 
         gps_line_ready = 0;
 
@@ -1568,7 +1483,7 @@ void TransmitGPS(){
     }
 
     // Re-enable UART RX interrupt
-    UCA0IE |= UCRXIE;
+    UCA1IE |= UCRXIE;
 }
 
 // ==================== Run State Behaviour =========================//
@@ -1577,7 +1492,7 @@ void TransmitGPS(){
 // Also need to move RecoveryMode above this function. 
 
 
-void RunStateBehaviour(){
+void RunStateBehaviour() {
     switch (current_flight_state) {
         case PREFLIGHT:
             break;
@@ -1606,8 +1521,11 @@ void RecoveryMode(void) {
     DisableBMP();
     DisableACCL();
 
-    // InitCoilPWM(); 
-    // InitFanPWM();
+    // InitCoilGPIO(); 
+    // InitFanGPIO(); 
+    // gpioUnlock();
+    // ConfigCoilPWM(); 
+    // ConfigFanPWM();
 
     // ConfigBackgroundTimer();
     // __enable_interrupt();
@@ -1629,7 +1547,8 @@ void RecoveryMode(void) {
                 pwm_enabled = true;
                 duty_cycle = 100;
                 SetCoilPWM(duty_cycle);
-                TurnOnRegulator();
+                InitRegulatorGPIO();
+                EnableRegulator();
                 SetFanPWM(duty_cycle);
 
                 start_delay_seconds(15);
@@ -1677,7 +1596,8 @@ void RecoveryMode(void) {
                 pwm_enabled = true;
                 duty_cycle = 100;
                 SetCoilPWM(duty_cycle);
-                TurnOnRegulator();
+                InitRegulatorGPIO();
+                EnableRegulator();
                 SetFanPWM(duty_cycle);
 
                 start_delay_seconds(15);
@@ -1687,20 +1607,20 @@ void RecoveryMode(void) {
 }
 
 // InitGPIO() initialises all GPIO pins
-void InitGPIO(){
+void InitGPIO() {
     InitCoilGPIO();                 // P5.1
     InitFanGPIO();                  // P6.1
     InitADCRef();
-    InitADCGPIO();                  // P5.0, P5.2, P5.3
+    InitADCGPIO();                  // P5.0, P1.4, P5.3
     InitRegulatorGPIO();            // P3.5
 
     InitSensorsGPIO();
     
     InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
-    InitGPSGPIO();                  // P1.6, P1.7
+    InitGPSGPIO();                  // P4.2, P4.3
 }
 
-void InitOnboardLEDS(){
+void InitOnboardLEDS() {
     // Init LEDs
     P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
     P6DIR |= GREEN_LED;
@@ -1713,7 +1633,7 @@ void InitOnboardLEDS(){
 // Unlock GPIO once here
 
 // ConfigPeripheral() configures all peripherals such as timers, clocks, modules
-void ConfigPeripheral(){
+void ConfigPeripheral() { 
     ConfigCoilPWM();
     ConfigFanPWM();
     ConfigADC();
@@ -1738,7 +1658,6 @@ void ConfigPeripheral(){
 
 
 // ==================== Main Flight Loop (Start) =========================//
-
 
 int main(void) {
     
@@ -1772,46 +1691,21 @@ int main(void) {
     
 }
 
-
-
 // ==================== Main Flight Loop (END) =========================//
     
-    /*
-    // Main function. Reading pressure data in Pascals from BMP then using it in UpdateFlightState. 
-    volatile float pressure;
-    WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. 
-
-    InitSensorsGPIO();
-    ConfigSensorsI2C();
-    ConfigBMPI2C();
-    CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c); 
-    //ConfigACCLI2C();
-
-    while (1) {
-        ProcessBMPDataI2C(); 
-        UpdateFlightStateI2C();
-    }
-    */
+  
 
 
-
-    /*
-    // GPS testing for main
-    while(1){
-        TransmitGPS();
-    }
-    */
-    
-
-
-    /*
     // old main function
+    /*
     bool recovery_active = false;
 
     // LoRa
     
     InitADCRef();
-    InitCoilPWM();
+    InitCoilGPIO(); 
+    gpioUnlock();
+    ConfigCoilPWM(); 
 
     InitACCL();
     ConfigureACCL();
@@ -1875,27 +1769,13 @@ int main(void) {
     }
     */
 
-
-
-
-    /*
-    // Demonstrate change in flight state. Passing in mock delta altitude value, and acceleration magnitude. 
-    current_flight_state = PREFLIGHT;
-    UpdateFlightStateDemo(10, 10); 
-    UpdateFlightStateDemo(2, 2); 
-
-    if (current_flight_state == LANDED) {
-        RecoveryMode();
-    }
-    */
     
-    
-
-
+    // Successful pulsing of PWM using LED
     /*
-    //Successful pulsing of PWM using LED
     WDTCTL = WDTPW + WDTHOLD; // Stop Watchdog Timer
-    InitCoilPWM();
+    InitCoilGPIO(); 
+    gpioUnlock();
+    ConfigCoilPWM(); 
 
     while (1) {
 		for (uint16_t i = 0; i < 100; i++) {
@@ -1909,36 +1789,40 @@ int main(void) {
 	}
     */
 
-    // Code to test PWM coil on PCB
+    // Code to test coil PWM on PCB
     /*
     WDTCTL = WDTPW + WDTHOLD;
-    InitCoilPWM();
+    InitCoilGPIO(); 
+    gpioUnlock();
+    ConfigCoilPWM(); 
 
     while (1) {
         SetCoilPWM(30);
     }
     */
     
-
-    
+    // Code to test fan PWM
     /*
     WDTCTL = WDTPW + WDTHOLD; // Stop Watchdog Timer
-    InitFanPWM();
+    InitFanGPIO(); 
+    gpioUnlock();
+    ConfigFanPWM();
     SetFanPWM(100);
     */
     
 
 
-
+    // Successful use of background timer interrupts with toggling LEDs (other task)
     /*
-    //Sucessful testing of toggling LEDs with background timer.
     WDTCTL = WDTPW | WDTHOLD;
 
     // Initialise timer
     ConfigBackgroundTimer();
 
     // Init PWM
-    InitCoilPWM();
+    IInitCoilGPIO(); 
+    gpioUnlock();
+    ConfigCoilPWM(); 
     
     // Init LEDs
     P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
@@ -1977,8 +1861,9 @@ int main(void) {
     */
 
 
-    /*
+
     //ADC Testing:
+    /*
     WDTCTL = WDTPW | WDTHOLD;    
     InitADCRef();               // I believe setting the reference can be put after InitADCGPIO
 
@@ -2005,9 +1890,26 @@ int main(void) {
     */
     
     
-
+    // Reading BMP data (pressure data in Pa), and using it in UpdateFlightState(I2C)
     /*
-    // Successful GPS testing: watch LAT LON. Correct values when fixed. ZERSO otherwise.
+    volatile float pressure;
+    WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. 
+
+    InitSensorsGPIO();
+    ConfigSensorsI2C();
+    ConfigBMPI2C();
+    CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c); 
+    //ConfigACCLI2C();
+
+    while (1) {
+        ProcessBMPDataI2C(); 
+        UpdateFlightStateI2C();
+    }
+    */
+
+
+    // Successful GPS testing: watch LAT LON. Correct values when fixed. ZERO otherwise.
+    /*
     WDTCTL = WDTPW | WDTHOLD;
     InitClock16MHz();
     Software_Trim();
@@ -2015,7 +1917,8 @@ int main(void) {
     P1DIR |= BIT0;             // RED LED as output
     P1OUT &= ~BIT0;            // Turn RED LED off
     ClearGPSBuffer();
-    InitGPSUART();
+    InitGPSGPIO(); 
+    ConfigGPSUART();
     
     while(1){
         __bis_SR_register(GIE); // Enter LPM0, Enable Interrupt
@@ -2039,9 +1942,8 @@ int main(void) {
     }
     */
 
-    
-    /*
     // LoRa Code
+    /*
     // Stop watchdog timer
     WDTCTL = WDTPW | WDTHOLD;
 
@@ -2063,9 +1965,18 @@ int main(void) {
     
     LoRaTX(); 
     */
+ 
+    // GPS testing for main
+    /*
+    while(1){
+        TransmitGPS();
+    }
+    */
 
+
+
+    // Subsystem list
 /*
-    Subsystems list;
     coil pwm    done and tested
     fan pwm     done and tested
     bmp         done and tested
