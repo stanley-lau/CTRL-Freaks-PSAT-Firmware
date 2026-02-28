@@ -45,7 +45,7 @@
 #define ALTITUDE_THRESHOLD    5       // meters
 
 // Threshold values based on testing and material properties. 
-#define CURRENT_MAX 7.26   // Max current in Amps
+#define CURRENT_MAX 6.8   // Max current in Amps
 #define BATTERY_MAX 60     // Max temperature in Celsius
 #define CHAMBER_MAX 200
 
@@ -118,17 +118,29 @@ void SetCoilPWM(uint8_t duty_cycle) {
 // ==================== Voltage Regulator Enable  =========================//
 // When PWM is turned on, voltage regulator also needs to be turned on  
 void InitRegulatorGPIO() {
-    // Force P3.5 to GPIO by setting P3SEL0/1 to 0 
-    P3SEL0 &= ~BIT5;  
-    P3SEL1 &= ~BIT5;
+    // EN_BUCK pin 3.1 and EN_BOOST at pin 3.2 
+    // Force P3.1 to GPIO by setting P3SEL0/1 to 0 
+    P3SEL0 &= ~BIT1;  
+    P3SEL1 &= ~BIT1;
 
-    // REG_EN as output
-    P3DIR |= BIT5;
+    // Force P3.2 to GPIO by setting P3SEL0/1 to 0 
+    P3SEL0 &= ~BIT2;  
+    P3SEL1 &= ~BIT2;
+
+    // Setting pins as output
+    P3DIR |= BIT1;
+    P3DIR |= BIT2;
 }
 
 void EnableRegulator() {
     // Enable voltage regulator
-    P3OUT |= BIT5;
+    P3OUT |= BIT1;
+    P3OUT |= BIT2;
+}
+
+void DisableRegulator() {
+    P3OUT &= ~BIT1;
+    P3OUT &= ~BIT2;
 }
 
 // ==================== Fan PWM =========================//
@@ -173,46 +185,7 @@ void SetFanPWM(uint8_t duty_cycle) {
 
 }
 
-// ==================== FlightStates =========================//
-
-// Initialise flightstates
-enum FlightState {PREFLIGHT, FLIGHT, LANDED};
-enum FlightState current_flight_state = PREFLIGHT;
-enum FlightState prev_flight_state;
-
-// Utilise BOTH sensor's reading of altitude and acceleration to determine current flight state. 
-// Compare value against initial calculated altitude and pressure to determine change. 
-void UpdateFlightState() {
-    float delta;
-    
-    if (!AltWindow_GetDelta(&delta)){
-        return;
-    }
-
-    float accl_magnitude = ReadACCL();
-
-    switch (current_flight_state) {
-        
-        case PREFLIGHT:
-        // Detect launch: altitude change (current altitude jumps from ground altitude) + movement (acceleration value > 0)
-            if (delta > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
-                prev_flight_state = PREFLIGHT;
-                current_flight_state = FLIGHT;
-            }
-            break;
-            
-        case FLIGHT:
-        // Detect landing: altitude change negligible/altitude approx ground altitude AND negligible acceleration
-            if (delta < ALTITUDE_THRESHOLD && accl_magnitude < ACCL_THRESHOLD) {
-                prev_flight_state = FLIGHT;
-                current_flight_state = LANDED;
-            }
-            break;
-
-        case LANDED:
-            break;
-    }
-}
+// ========================= FlightStates ============================//
 
 /* =========================== SENSORS =============================== */
 
@@ -625,7 +598,12 @@ void DisableACCLI2C() {
 }
 
 //===================== Combining ACCL and BMP data. Implemented into UpdateFlightState ====================//
+// Initialise flightstates
+enum FlightState {PREFLIGHT, FLIGHT, LANDED};
+enum FlightState current_flight_state = PREFLIGHT;
 
+// Utilise BOTH sensor's reading of altitude and acceleration to determine current flight state. 
+// Compare value against initial calculated altitude and pressure to determine change. 
 void UpdateFlightStateI2C() {
     float delta_i2c;
    
@@ -635,8 +613,7 @@ void UpdateFlightStateI2C() {
     }
     delta_i2c = (fabsf(delta_i2c));
     
-    
-    //UpdateACCLStatusI2C();
+    UpdateACCLStatusI2C();
 
     if (!accl_data_ready_i2c) {
         return;
@@ -652,14 +629,12 @@ void UpdateFlightStateI2C() {
         
         case PREFLIGHT:
             if (delta_i2c > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
-                prev_flight_state = PREFLIGHT;
                 current_flight_state = FLIGHT;
             }
             break;
             
         case FLIGHT:
             if (delta_i2c < ALTITUDE_THRESHOLD && OverallAltitudeChangeI2C < ALTITUDE_THRESHOLD && accl_magnitude < ACCL_THRESHOLD) {
-                prev_flight_state = FLIGHT;
                 current_flight_state = LANDED;
             }
             break;
@@ -820,16 +795,17 @@ void start_delay_seconds(uint16_t seconds) {
     __enable_interrupt();
 }
 
-// Initialise Timer_B for tick every 1 second. FKA: Timer3_init_1s_tick
+// Initialise Timer_B for tick every 1 second. FKA: Timer0_init_1s_tick
+// Using timer 0 instead of timer 3 to prevent clash with PWM timer 
 void ConfigBackgroundTimer() {
-    TB3CTL = TBSSEL__ACLK | MC__UP | TBCLR;
-    TB3CCR0 = 32768 - 1;     // 1 second
-    TB3CCTL0 = CCIE;
+    TB0CTL = TBSSEL__ACLK | MC__UP | TBCLR;
+    TB0CCR0 = 32768 - 1;     // 1 second
+    TB0CCTL0 = CCIE;
 }
 
 // ISR. Interrupt is called every second, decrementing delay time until 0. 
-#pragma vector = TIMER3_B0_VECTOR
-__interrupt void Timer3_B0_ISR(void) {
+#pragma vector = TIMER0_B0_VECTOR
+__interrupt void Timer0_B0_ISR(void) {
     if (delay_seconds > 0)
     {
         delay_seconds--;
@@ -895,14 +871,14 @@ MSP430 3v3 -- GPS 3v3
 MSP430 GND -- GPS GND: 
 */
 
-void InitGPSGPIO(){
+void InitGPSGPIO() {
     // Configure pins for UART
     P4SEL0 |= BIT2 | BIT3;   // RX + TX
     P4SEL1 &= ~(BIT2 | BIT3);
     // TX not used  
 }
 
-void ConfigGPSUART(){
+void ConfigGPSUART() {
     // Configure UART
     UCA1CTLW0 = UCSWRST;                // Put eUSCI in reset          
     UCA1CTLW0 |= UCSSEL__SMCLK;         // Select SMCLK as clock source
@@ -943,7 +919,7 @@ __interrupt void EUSCI_A1_ISR(void) {
     
 }
 
-void InitClock16MHz(void){
+void InitClock16MHz(void) {
     
     __bis_SR_register(SCG0);                 // disable FLL
     CSCTL3 |= SELREF__REFOCLK;               // Set REFO as FLL reference source
@@ -955,8 +931,7 @@ void InitClock16MHz(void){
     CSCTL4 = SELMS__DCOCLKDIV | SELA__REFOCLK; // set default REFO(~32768Hz) as ACLK source, MCLK/SMCLK from DCOCLKDIV
 }
 
-void Software_Trim()
-{
+void Software_Trim() {
     unsigned int oldDcoTap = 0xffff;
     unsigned int newDcoTap = 0xffff;
     unsigned int newDcoDelta = 0xffff;
@@ -1024,7 +999,7 @@ void Software_Trim()
     while(CSCTL7 & (FLLUNLOCK0 | FLLUNLOCK1)); // Poll until FLL is locked
 }
 
-void ClearGPSBuffer(void){
+void ClearGPSBuffer(void) {
     uint8_t i;
     for (i = 0; i < GPS_BUFFER_SIZE; i++) {
         gps_buffer[i] = 0;
@@ -1183,7 +1158,6 @@ static void append_coordinate(char **p, double val, uint8_t frac_digits) {
     // Append fractional part with leading zeros
     append_uint_pad(p, (uint16_t)frac, frac_digits);
 }
-
 
 // ==================== OPUS 4.6 ==================== ///
 // INT Approach
@@ -1486,49 +1460,24 @@ void TransmitGPS() {
     UCA1IE |= UCRXIE;
 }
 
-// ==================== Run State Behaviour =========================//
-
-// Need to define recovery_active. Where is this happening?
-// Also need to move RecoveryMode above this function. 
-
-
-void RunStateBehaviour() {
-    switch (current_flight_state) {
-        case PREFLIGHT:
-            break;
-        case FLIGHT:
-            // Log some data here;
-            break;
-        case LANDED:
-            // if (!recovery_active){
-            //     recovery_active = true;
-            //     RecoveryMode();
-            // }
-            break;
-        default:
-            break;
-    }
-}
-
-
-// ==================== Recovery Function =========================//
-
+// ==================== Recovery function ============================// 
 void RecoveryMode(void) {
     uint8_t duty_cycle = 0;
     bool pwm_enabled = false;
     bool initial_delay_done = false;
 
-    DisableBMP();
-    DisableACCL();
+    DisableBMPI2C();
+    DisableACCLI2C();
 
-    // InitCoilGPIO(); 
-    // InitFanGPIO(); 
-    // gpioUnlock();
-    // ConfigCoilPWM(); 
-    // ConfigFanPWM();
+    InitCoilGPIO(); 
+    InitFanGPIO(); 
+    gpioUnlock();
+    ConfigCoilPWM(); 
+    ConfigFanPWM();
+    InitRegulatorGPIO();
 
-    // ConfigBackgroundTimer();
-    // __enable_interrupt();
+    ConfigBackgroundTimer();
+    __enable_interrupt();
     
     start_delay_seconds(450); // Initial 7.5 minute delay
 
@@ -1537,7 +1486,8 @@ void RecoveryMode(void) {
         // Stage 1: During first 7.5 minutes: Communicating with LoRa to receive GPS information. After 7.5min, move onto stage 2. 
         if (!initial_delay_done)
         {
-            // LoRa + GPS work here
+            TransmitGPS();
+            
             if (timer_expired)
             {
                 timer_expired = 0;
@@ -1546,9 +1496,8 @@ void RecoveryMode(void) {
                 // Start PWM ON window for 15 seconds. Smoke release. 
                 pwm_enabled = true;
                 duty_cycle = 100;
-                SetCoilPWM(duty_cycle);
-                InitRegulatorGPIO();
                 EnableRegulator();
+                SetCoilPWM(duty_cycle);
                 SetFanPWM(duty_cycle);
 
                 start_delay_seconds(15);
@@ -1565,6 +1514,7 @@ void RecoveryMode(void) {
                     duty_cycle = 0;
                     SetCoilPWM(duty_cycle); 
                     SetFanPWM(duty_cycle);
+                    DisableRegulator();
                 }
             }
 
@@ -1574,6 +1524,7 @@ void RecoveryMode(void) {
             pwm_enabled = false;
             SetCoilPWM(0);
             SetFanPWM(0);
+            DisableRegulator();
 
             // Start cooldown
             start_delay_seconds(45);
@@ -1585,6 +1536,7 @@ void RecoveryMode(void) {
             // 45 second cooldown. Allow wick to resaturate. 
             SetCoilPWM(0);
             SetFanPWM(0);
+            DisableRegulator();
 
             // Other background tasks here
 
@@ -1595,15 +1547,25 @@ void RecoveryMode(void) {
                 // Restart PWM ON window
                 pwm_enabled = true;
                 duty_cycle = 100;
-                SetCoilPWM(duty_cycle);
-                InitRegulatorGPIO();
                 EnableRegulator();
+                SetCoilPWM(duty_cycle);
                 SetFanPWM(duty_cycle);
 
                 start_delay_seconds(15);
             }
         }
     }
+}
+
+// ============= Helper functions to ensure clean code =============//
+void InitOnboardLEDS() {
+    // Init LEDs
+    P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
+    P6DIR |= GREEN_LED;
+
+    // Turn LEDs off.
+    P1OUT &= ~RED_LED;
+    P6OUT &= ~GREEN_LED;
 }
 
 // InitGPIO() initialises all GPIO pins
@@ -1618,16 +1580,6 @@ void InitGPIO() {
     
     InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
     InitGPSGPIO();                  // P4.2, P4.3
-}
-
-void InitOnboardLEDS() {
-    // Init LEDs
-    P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
-    P6DIR |= GREEN_LED;
-
-    // Turn LEDs off.
-    P1OUT &= ~RED_LED;
-    P6OUT &= ~GREEN_LED;
 }
 
 // Unlock GPIO once here
@@ -1656,7 +1608,25 @@ void ConfigPeripheral() {
     ConfigGPSUART();
 }
 
-
+// ==================== Run State Behaviour =========================//
+// Need to define recovery_active. Where is this happening?
+void RunStateBehaviour() {
+    switch (current_flight_state) {
+        case PREFLIGHT:
+            break;
+        case FLIGHT:
+            // Log some data here;
+            break;
+        case LANDED:
+            // if (!recovery_active){
+            //     recovery_active = true;
+            RecoveryMode();
+            // }
+            break;
+        default:
+            break;
+    }
+}
 // ==================== Main Flight Loop (Start) =========================//
 
 int main(void) {
@@ -1670,31 +1640,24 @@ int main(void) {
     gpioUnlock();                       // Unlock GPIO
     ConfigPeripheral();                 // Config Peripherals
     
-    //ConfigBMPI2C();
-    //CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
-    //ConfigACCLI2C();
+    __enable_interrupt();               // Enable Interrupts
 
-    __enable_interrupt();               // enable interrupts
+    ConfigBMPI2C();
+    CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
+    ConfigACCLI2C();
 
-    // while(1){
-    //     ProcessBMPDataI2C();       // Read sensors 
-    //     UpdateFlightStateI2C();    // Update state 
-    //     // read sensors (ProcessBMPDataI2C())
-    //     // update state (UpdateFlightStateI2C())
-    //     // behaviour (RunStateBehaviour())
-    // }
-
-    // Testing:
     while(1){
-        TransmitGPS();
+        if (gps_line_ready) {
+            TransmitGPS(); 
+        }
+        ProcessBMPDataI2C();       // Read sensors 
+        UpdateFlightStateI2C();    // Update state 
+        RunStateBehaviour();
     }
-    
+
 }
 
 // ==================== Main Flight Loop (END) =========================//
-    
-  
-
 
     // old main function
     /*
@@ -1820,9 +1783,10 @@ int main(void) {
     ConfigBackgroundTimer();
 
     // Init PWM
-    IInitCoilGPIO(); 
+    InitCoilGPIO(); 
     gpioUnlock();
     ConfigCoilPWM(); 
+    InitClock16MHz();
     
     // Init LEDs
     P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
@@ -1856,7 +1820,7 @@ int main(void) {
 
         P1OUT ^= RED_LED;
         P6OUT ^= GREEN_LED;
-        __delay_cycles(100000); // 100ms delay at 1MHz (default clock)
+        __delay_cycles(1600000); // 100ms delay at 16MHz
     }
     */
 
