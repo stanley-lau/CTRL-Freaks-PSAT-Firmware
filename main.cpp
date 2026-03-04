@@ -683,12 +683,12 @@ void ConfigADC() {
 }
 
 // Select ADC channel and set off interrupt to read ADC
-void StartADC(uint8_t channel) {
+void StartADC(uint16_t channel) {
 
     ADCCTL0 &= ~ADCENC;                  // Disable ADC
     ADCMCTL0 = channel | ADCSREF_0;      // Set channel + AVCC ref
     ADCCTL0 |= ADCENC | ADCSC;           // Start conversion
-    __bis_SR_register( GIE);             // Go into low power mode 0 with interrupts enabled
+    __bis_SR_register( GIE);             // Enable interrupts
 }
 
 // Converts ADC reading into temperature in celsius
@@ -1669,30 +1669,26 @@ int main(void) {
     InitClock16MHz();                   // Init 16Mhz CLK
     Software_Trim();                    // Compensate Software Dift
 
-    InitOnboardLEDS(); 
+    //InitOnboardLEDS(); // For MCU V2
+    // Init LEDs
+    P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
+    P6DIR |= GREEN_LED;
+
+    // Turn LEDs off.
+    P1OUT &= ~RED_LED;
+    P6OUT &= ~GREEN_LED;
     
     //InitGPIO();                         // Init all GPIO
-
-    //InitLoRaGPIO();
-    //InitGPSGPIO();
     ConfigBackgroundTimer();
+    InitADCRef();
+    InitADCGPIO();                  // P5.0, P1.4, P5.3
+
 
     gpioUnlock();                       // Unlock GPIO
+
+    //ConfigPeripheral();
+    ConfigADC();
     
-    //ConfigPeripheral();                 // Config Peripherals
-    // spi_B1_init();          // "ConfigLoRaSPI"
-    // lora_configure(
-    //         BANDWIDTH125K,              // 125 khz
-    //         CODINGRATE4_5,              // Coding rate 4/5
-    //         CRC_ENABLE,                 // Enable CRC
-    //         EXPLICIT_HEADER_MODE,       // Explicit header
-    //         POLARITY_NORMAL_MODE,       // Normal IQ
-    //         PREAMBLE_LENGTH,            // Preamble 8
-    //         SPREADINGFACTOR128,         // SF7
-    //         SYNC_WORD_RESET,            // 0x12
-    //         radioChipSelPin
-    // );
-    // ConfigGPSUART();
     
     __enable_interrupt();               // Enable Interrupts
     
@@ -1700,44 +1696,28 @@ int main(void) {
     //CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
     //ConfigACCLI2C();
 
-    // DisableLED(FLIGHT_LED);
-    // DisableLED(LANDED_LED);
-    // DisableLED(PRE_LED);
-    // P2OUT |= BIT0;
-    // P2OUT |= BIT1;
-    // P2OUT |= BIT2;
+    uint16_t chamber_temperature;
+    uint16_t battery_temperature;
 
-    // while(1){
-    //     //ProcessBMPDataI2C();       // Read sensors 
-    //     //UpdateFlightStateI2C();    // Update state 
-    //     //RunStateBehaviour();
+    while(1){
+        //ProcessBMPDataI2C();       // Read sensors 
+        //UpdateFlightStateI2C();    // Update state 
+        //RunStateBehaviour();
 
-    //     // LoRa + GPS Testing
-    //     //TransmitGPS();
-    // }
+        // LoRa + GPS Testing
+        //TransmitGPS();
 
-    EnableLED(FLIGHT_LED);
-    EnableLED(LANDED_LED);
-    EnableLED(PRE_LED);
+        // ADC real-time testing
+        chamber_temperature = GetChamberTemp();
 
-    start_delay_seconds(60);   // start 10-minute timer
-
-        while (1)
-        {
-            if (timer_expired)
-            {
-                timer_expired = 0;
-                // do the thing after 10 minutes
-
-                // You can Rearm the timer here byt calling start_delay_seconds(6000) here for example.
-                    DisableLED(FLIGHT_LED);
-                    DisableLED(LANDED_LED);
-                    DisableLED(PRE_LED);
-            }
-
-            // other background work here
-            // state machines, IO, comms, etc.
+        if (chamber_temperature > 30){
+            P1OUT |= BIT0;       // Turn LED ON when temp > 30C
+        } else {
+            P1OUT &= ~BIT0;      // Turn LED OFF otherwise
         }
+        __delay_cycles(8000000);
+    }
+
 }
 
 // ==================== Main Flight Loop (END) =========================//
