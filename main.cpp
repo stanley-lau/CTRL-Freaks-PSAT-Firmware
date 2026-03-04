@@ -434,7 +434,7 @@ void CalibrateBMPI2C (float *ground_pressure_i2c, float *initial_altitude_i2c) {
     pressure_data_ready_i2c = false;
 
     // Calibrate current pressure at ground using 100 samples 
-    *ground_pressure_i2c = CalibrateGroundPressureI2C(100); 
+    *ground_pressure_i2c = CalibrateGroundPressureI2C(10); 
     *initial_altitude_i2c = PressureToAltitudeI2C(*ground_pressure_i2c);
 }
 
@@ -584,7 +584,7 @@ float ReadACCLI2C() {
     // This removes the 9.8 m/s^2 constant and any sensor offset
     volatile float linear_accel = fabsf(magnitude_ms2 - 9.80665f);
 
-    // Deadband: If result is small (noise), acceleration is 0.0
+    //Deadband: If result is small (noise), acceleration is 0.0
     if (linear_accel < 0.4f) {
         return 0.0f;
     }
@@ -619,13 +619,12 @@ void UpdateFlightStateI2C() {
         return;
     }
 
-    //float accl_magnitude = ReadACCLI2C();
-    float accl_magnitude = 0; 
+    float accl_magnitude = ReadACCLI2C();
     
     OverallAltitudeDeltaI2C(&OverallAltitudeChangeI2C);
     OverallAltitudeChangeI2C = (fabsf(OverallAltitudeChangeI2C));
 
-    switch (current_flight_state) {
+   switch (current_flight_state) {
         
         case PREFLIGHT:
             if (delta_i2c > ALTITUDE_THRESHOLD && accl_magnitude > ACCL_THRESHOLD) {
@@ -1560,12 +1559,21 @@ void RecoveryMode(void) {
 // ============= Helper functions to ensure clean code =============//
 void InitOnboardLEDS() {
     // Init LEDs
-    P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
-    P6DIR |= GREEN_LED;
+    P2DIR |= BIT0; // Red LED
+    P2DIR |= BIT1; // Yellow LED
+    P2DIR |= BIT1; // Green LED
 
     // Turn LEDs off.
-    P1OUT &= ~RED_LED;
-    P6OUT &= ~GREEN_LED;
+    P2OUT &= ~BIT0;
+    P2OUT &= ~BIT1;
+    P2OUT &= ~BIT2;
+
+    /*
+    // To turn on the LEDs
+    P2OUT |= BIT0;
+    P2OUT |= BIT1;
+    P2OUT |= BIT2;
+    */
 }
 
 // InitGPIO() initialises all GPIO pins
@@ -1613,15 +1621,21 @@ void ConfigPeripheral() {
 void RunStateBehaviour() {
     switch (current_flight_state) {
         case PREFLIGHT:
+            //TransmitGPS();
+            P1OUT |= RED_LED;
             break;
         case FLIGHT:
             // Log some data here;
+            P1OUT &= ~RED_LED;
+            P6OUT |= GREEN_LED;
             break;
         case LANDED:
             // if (!recovery_active){
             //     recovery_active = true;
-            RecoveryMode();
+            //RecoveryMode();
             // }
+            P1OUT |= RED_LED;
+            P6OUT |= GREEN_LED;
             break;
         default:
             break;
@@ -1632,29 +1646,42 @@ void RunStateBehaviour() {
 int main(void) {
     
     WDTCTL = WDTPW | WDTHOLD;           // Stop Watchdog Timer
-
+    
     InitClock16MHz();                   // Init 16Mhz CLK
     Software_Trim();                    // Compensate Software Dift
 
-    InitGPIO();                         // Init all GPIO
+    InitOnboardLEDS(); 
+    //InitGPIO();                         // Init all GPIO
+    InitLoRaGPIO();
+    InitGPSGPIO();
     gpioUnlock();                       // Unlock GPIO
-    ConfigPeripheral();                 // Config Peripherals
+    //ConfigPeripheral();                 // Config Peripherals
+    spi_B1_init();          // "ConfigLoRaSPI"
+    lora_configure(
+            BANDWIDTH125K,              // 125 khz
+            CODINGRATE4_5,              // Coding rate 4/5
+            CRC_ENABLE,                 // Enable CRC
+            EXPLICIT_HEADER_MODE,       // Explicit header
+            POLARITY_NORMAL_MODE,       // Normal IQ
+            PREAMBLE_LENGTH,            // Preamble 8
+            SPREADINGFACTOR128,         // SF7
+            SYNC_WORD_RESET,            // 0x12
+            radioChipSelPin
+    );
+    ConfigGPSUART();
     
     __enable_interrupt();               // Enable Interrupts
-
-    ConfigBMPI2C();
-    CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
-    ConfigACCLI2C();
+    
+    //ConfigBMPI2C();
+    //CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
+    //ConfigACCLI2C();
 
     while(1){
-        if (gps_line_ready) {
-            TransmitGPS(); 
-        }
-        ProcessBMPDataI2C();       // Read sensors 
-        UpdateFlightStateI2C();    // Update state 
-        RunStateBehaviour();
+        //ProcessBMPDataI2C();       // Read sensors 
+        //UpdateFlightStateI2C();    // Update state 
+        //RunStateBehaviour();
+        TransmitGPS();
     }
-
 }
 
 // ==================== Main Flight Loop (END) =========================//
