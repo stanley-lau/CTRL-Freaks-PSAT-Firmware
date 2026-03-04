@@ -1561,7 +1561,7 @@ void InitOnboardLEDS() {
     // Init LEDs
     P2DIR |= BIT0; // Red LED
     P2DIR |= BIT1; // Yellow LED
-    P2DIR |= BIT1; // Green LED
+    P2DIR |= BIT2; // Green LED
 
     // Turn LEDs off.
     P2OUT &= ~BIT0;
@@ -1574,6 +1574,22 @@ void InitOnboardLEDS() {
     P2OUT |= BIT1;
     P2OUT |= BIT2;
     */
+}
+
+enum LED {
+  PRE_LED = BIT0,
+  FLIGHT_LED = BIT1,
+  LANDED_LED = BIT2
+};
+
+// Enable LED on P2 (P2.0, P2.1, or P2.2)
+void EnableLED(LED Onboard_LED) {
+    P2OUT |= Onboard_LED;
+}
+
+// Disable LED on P2 (P2.0, P2.1, or P2.2)
+void DisableLED(LED Onboard_LED) {
+    P2OUT &= ~Onboard_LED;
 }
 
 // InitGPIO() initialises all GPIO pins
@@ -1622,20 +1638,23 @@ void RunStateBehaviour() {
     switch (current_flight_state) {
         case PREFLIGHT:
             //TransmitGPS();
-            P1OUT |= RED_LED;
+
+            //P1OUT |= RED_LED;
             break;
         case FLIGHT:
             // Log some data here;
-            P1OUT &= ~RED_LED;
-            P6OUT |= GREEN_LED;
+
+            // P1OUT &= ~RED_LED;
+            // P6OUT |= GREEN_LED;
             break;
         case LANDED:
             // if (!recovery_active){
             //     recovery_active = true;
             //RecoveryMode();
             // }
-            P1OUT |= RED_LED;
-            P6OUT |= GREEN_LED;
+
+            // P1OUT |= RED_LED;
+            // P6OUT |= GREEN_LED;
             break;
         default:
             break;
@@ -1651,24 +1670,29 @@ int main(void) {
     Software_Trim();                    // Compensate Software Dift
 
     InitOnboardLEDS(); 
+    
     //InitGPIO();                         // Init all GPIO
-    InitLoRaGPIO();
-    InitGPSGPIO();
+
+    //InitLoRaGPIO();
+    //InitGPSGPIO();
+    ConfigBackgroundTimer();
+
     gpioUnlock();                       // Unlock GPIO
+    
     //ConfigPeripheral();                 // Config Peripherals
-    spi_B1_init();          // "ConfigLoRaSPI"
-    lora_configure(
-            BANDWIDTH125K,              // 125 khz
-            CODINGRATE4_5,              // Coding rate 4/5
-            CRC_ENABLE,                 // Enable CRC
-            EXPLICIT_HEADER_MODE,       // Explicit header
-            POLARITY_NORMAL_MODE,       // Normal IQ
-            PREAMBLE_LENGTH,            // Preamble 8
-            SPREADINGFACTOR128,         // SF7
-            SYNC_WORD_RESET,            // 0x12
-            radioChipSelPin
-    );
-    ConfigGPSUART();
+    // spi_B1_init();          // "ConfigLoRaSPI"
+    // lora_configure(
+    //         BANDWIDTH125K,              // 125 khz
+    //         CODINGRATE4_5,              // Coding rate 4/5
+    //         CRC_ENABLE,                 // Enable CRC
+    //         EXPLICIT_HEADER_MODE,       // Explicit header
+    //         POLARITY_NORMAL_MODE,       // Normal IQ
+    //         PREAMBLE_LENGTH,            // Preamble 8
+    //         SPREADINGFACTOR128,         // SF7
+    //         SYNC_WORD_RESET,            // 0x12
+    //         radioChipSelPin
+    // );
+    // ConfigGPSUART();
     
     __enable_interrupt();               // Enable Interrupts
     
@@ -1676,12 +1700,44 @@ int main(void) {
     //CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
     //ConfigACCLI2C();
 
-    while(1){
-        //ProcessBMPDataI2C();       // Read sensors 
-        //UpdateFlightStateI2C();    // Update state 
-        //RunStateBehaviour();
-        TransmitGPS();
-    }
+    // DisableLED(FLIGHT_LED);
+    // DisableLED(LANDED_LED);
+    // DisableLED(PRE_LED);
+    // P2OUT |= BIT0;
+    // P2OUT |= BIT1;
+    // P2OUT |= BIT2;
+
+    // while(1){
+    //     //ProcessBMPDataI2C();       // Read sensors 
+    //     //UpdateFlightStateI2C();    // Update state 
+    //     //RunStateBehaviour();
+
+    //     // LoRa + GPS Testing
+    //     //TransmitGPS();
+    // }
+
+    EnableLED(FLIGHT_LED);
+    EnableLED(LANDED_LED);
+    EnableLED(PRE_LED);
+
+    start_delay_seconds(60);   // start 10-minute timer
+
+        while (1)
+        {
+            if (timer_expired)
+            {
+                timer_expired = 0;
+                // do the thing after 10 minutes
+
+                // You can Rearm the timer here byt calling start_delay_seconds(6000) here for example.
+                    DisableLED(FLIGHT_LED);
+                    DisableLED(LANDED_LED);
+                    DisableLED(PRE_LED);
+            }
+
+            // other background work here
+            // state machines, IO, comms, etc.
+        }
 }
 
 // ==================== Main Flight Loop (END) =========================//
