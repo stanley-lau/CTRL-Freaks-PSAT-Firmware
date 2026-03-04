@@ -1708,14 +1708,14 @@ int main(void) {
         //TransmitGPS();
 
         // ADC real-time testing
-        chamber_temperature = GetChamberTemp();
+        battery_temperature = GetBatteryTemp();
 
-        if (chamber_temperature > 30){
+        if (battery_temperature > 28){
             P1OUT |= BIT0;       // Turn LED ON when temp > 30C
         } else {
             P1OUT &= ~BIT0;      // Turn LED OFF otherwise
         }
-        __delay_cycles(8000000);
+        __delay_cycles(4000000);
     }
 
 }
