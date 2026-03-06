@@ -1651,7 +1651,7 @@ void InitGPIO() {
     InitFanGPIO();                  // P6.1
     InitADCRef();
     InitADCGPIO();                  // P5.0, P1.4, P5.3
-    InitRegulatorGPIO();            // P3.5
+    InitRegulatorGPIO();            // P3.1 P3.2
 
     InitSensorsGPIO();
     
@@ -1671,6 +1671,8 @@ void ConfigPeripheral() {
 
     ConfigBackgroundTimer();
     spi_B1_init();          // "ConfigLoRaSPI"
+
+    // OUTDATED LoRa configure.
     lora_configure(
             BANDWIDTH125K,              // 125 khz
             CODINGRATE4_5,              // Coding rate 4/5
@@ -1678,7 +1680,7 @@ void ConfigPeripheral() {
             EXPLICIT_HEADER_MODE,       // Explicit header
             POLARITY_NORMAL_MODE,       // Normal IQ
             PREAMBLE_LENGTH,            // Preamble 8
-            SPREADINGFACTOR128,         // SF7
+            SPREADINGFACTOR256,         // SF8
             SYNC_WORD_RESET,            // 0x12
             radioChipSelPin
     );
@@ -1722,26 +1724,26 @@ int main(void) {
     InitClock16MHz();                   // Init 16Mhz CLK
     Software_Trim();                    // Compensate Software Dift
     
-    //InitGPIO();                         // Init all GPIO
-    InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
-    InitGPSGPIO();                  // P4.2, P4.3
+    InitGPIO();                         // Init all GPIO
+    //InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
+    //InitGPSGPIO();                  // P4.2, P4.3
 
     gpioUnlock();                       // Unlock GPIO
 
     ConfigPeripheral();
-    spi_B1_init();          // "ConfigLoRaSPI"
-    lora_configure(
-            BANDWIDTH125K,              // 125 khz
-            CODINGRATE4_5,              // Coding rate 4/5
-            CRC_ENABLE,                 // Enable CRC
-            EXPLICIT_HEADER_MODE,       // Explicit header
-            POLARITY_NORMAL_MODE,       // Normal IQ
-            PREAMBLE_LENGTH,            // Preamble 8
-            SPREADINGFACTOR256,         // SF8
-            SYNC_WORD_RESET,            // 0x12
-            radioChipSelPin
-    );
-    ConfigGPSUART();    
+    // spi_B1_init();          // "ConfigLoRaSPI"
+    // lora_configure(
+    //         BANDWIDTH125K,              // 125 khz
+    //         CODINGRATE4_5,              // Coding rate 4/5
+    //         CRC_ENABLE,                 // Enable CRC
+    //         EXPLICIT_HEADER_MODE,       // Explicit header
+    //         POLARITY_NORMAL_MODE,       // Normal IQ
+    //         PREAMBLE_LENGTH,            // Preamble 8
+    //         SPREADINGFACTOR256,         // SF8
+    //         SYNC_WORD_RESET,            // 0x12
+    //         radioChipSelPin
+    // );
+    // ConfigGPSUART();    
     __enable_interrupt();               // Enable Interrupts
     
     //ConfigBMPI2C();
@@ -1749,13 +1751,24 @@ int main(void) {
     //ConfigACCLI2C();
 
 
-    while(1){
-        //ProcessBMPDataI2C();       // Read sensors 
-        //UpdateFlightStateI2C();    // Update state 
-        //RunStateBehaviour();
+    // while(1){
+    //     //ProcessBMPDataI2C();       // Read sensors 
+    //     //UpdateFlightStateI2C();    // Update state 
+    //     //RunStateBehaviour();
 
-        // LoRa + GPS Testing
-        TransmitGPS();
+    //     // LoRa + GPS Testing
+    //     TransmitGPS();
+    // }
+
+    start_delay_seconds(60);   // start 1min timer
+
+    while (1){
+        if (timer_expired){
+            //timer_expired = 0;
+            // do the thing after 10 minutes
+        } else {
+            TransmitGPS();
+        }
     }
 
 }
