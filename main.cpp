@@ -1609,6 +1609,12 @@ void RecoveryMode(void) {
     }
 }
 
+// ==================== Recovery V2 ============================//
+void RecoveryMode(void){
+
+}
+
+
 // ============= Helper functions to ensure clean code =============//
 void InitOnboardLEDS() {
     // Init LEDs
@@ -1725,25 +1731,10 @@ int main(void) {
     Software_Trim();                    // Compensate Software Dift
     
     InitGPIO();                         // Init all GPIO
-    //InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
-    //InitGPSGPIO();                  // P4.2, P4.3
-
+    InitOnboardLEDS();
     gpioUnlock();                       // Unlock GPIO
 
-    ConfigPeripheral();
-    // spi_B1_init();          // "ConfigLoRaSPI"
-    // lora_configure(
-    //         BANDWIDTH125K,              // 125 khz
-    //         CODINGRATE4_5,              // Coding rate 4/5
-    //         CRC_ENABLE,                 // Enable CRC
-    //         EXPLICIT_HEADER_MODE,       // Explicit header
-    //         POLARITY_NORMAL_MODE,       // Normal IQ
-    //         PREAMBLE_LENGTH,            // Preamble 8
-    //         SPREADINGFACTOR256,         // SF8
-    //         SYNC_WORD_RESET,            // 0x12
-    //         radioChipSelPin
-    // );
-    // ConfigGPSUART();    
+    ConfigPeripheral(); 
     __enable_interrupt();               // Enable Interrupts
     
     //ConfigBMPI2C();
@@ -1760,12 +1751,13 @@ int main(void) {
     //     TransmitGPS();
     // }
 
-    start_delay_seconds(60);   // start 1min timer
+    start_delay_seconds(120);   // start 2min timer
 
     while (1){
         if (timer_expired){
             //timer_expired = 0;
             // do the thing after 10 minutes
+            EnableLED(FLIGHT_LED);
         } else {
             TransmitGPS();
         }
