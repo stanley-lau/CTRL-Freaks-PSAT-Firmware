@@ -53,6 +53,7 @@
 
 // GPS 
 #define GPS_BUFFER_SIZE 128
+#define TEAM_ID 4  // Set your team ID (0-31)
 
 // ==================== Interrupt Service Routines =========================//
 // ADC Interrupt: Interrupt that read ADC memory into a global variable
@@ -854,6 +855,11 @@ double longitude = 0.0;
 double latitude = 0.0;
 uint8_t gps_sats = 0;
 char gps_time[10] = "00:00:00"; // HH:MM:SS
+uint8_t gps_hours = 0;
+uint8_t gps_minutes = 0;
+uint8_t gps_seconds = 0;
+uint8_t gps_fix = 0;           // 0=no fix, 1=GPS, 2=DGPS
+int32_t gps_altitude_dm = 0;   // altitude MSL in decimeters
 
 /*
 Connect:
@@ -1165,6 +1171,35 @@ static void append_coordinate(char **p, double val, uint8_t frac_digits) {
 volatile int32_t latitude_i = 0;   // -36607300 means -36.607300
 volatile int32_t longitude_i = 0;  // 174690066 means 174.690066
 
+// Parse altitude string (e.g. "123.4") to decimeters (1234)
+static int32_t parse_altitude_to_dm(const char *token) {
+    if (token == NULL || token[0] == '\0') return 0;
+
+    int32_t sign = 1;
+    const char *p = token;
+
+    if (*p == '-') {
+        sign = -1;
+        p++;
+    }
+
+    int32_t whole = 0;
+    while (*p >= '0' && *p <= '9') {
+        whole = whole * 10 + (*p - '0');
+        p++;
+    }
+
+    int32_t tenth = 0;
+    if (*p == '.') {
+        p++;
+        if (*p >= '0' && *p <= '9') {
+            tenth = *p - '0';
+        }
+    }
+
+    return sign * (whole * 10 + tenth);
+}
+
 // Parse NMEA coord token directly to integer (degrees * 1,000,000)
 // Input: "3636.44029" (DDMM.MMMMM) or "17441.40395" (DDDMM.MMMMM)
 static int32_t parse_nmea_to_int(const char *token) {
@@ -1253,6 +1288,10 @@ void parse_gngga(char *line) {
                 // Add 12 hour offset and wrap around at 24
                 hh = (hh + 13) % 24;
 
+                gps_hours = (uint8_t)hh;
+                gps_minutes = (uint8_t)mm;
+                gps_seconds = (uint8_t)ss;
+
                 gps_time[0] = '0' + (hh / 10);
                 gps_time[1] = '0' + (hh % 10);
                 gps_time[2] = ':';
@@ -1270,6 +1309,7 @@ void parse_gngga(char *line) {
         else if (field == 6) ew = token[0];
         else if (field == 7) fix = atoi(token);
         else if (field == 8) sats = atoi(token);
+        else if (field == 10) gps_altitude_dm = parse_altitude_to_dm(token);
 
         token = strtok(NULL, ",");
     }
@@ -1277,6 +1317,7 @@ void parse_gngga(char *line) {
     latitude_i = (ns == 'S') ? -lat_raw : lat_raw;
     longitude_i = (ew == 'W') ? -lon_raw : lon_raw;
     gps_sats = sats;
+    gps_fix = fix;
 }
 
 // Append integer coordinate as decimal string: -36607300 -> "-36.607300"
@@ -1329,64 +1370,76 @@ All these pins are broken out on the DEV board which means we can use them tempo
 // Chip Select pin
 GpioPin radioChipSelPin = {&P4DIR, &P4OUT, BIT4}; // P4.4
 
-// INT approach version of LoRaTX - uses integer coordinates to avoid floating point in packet construction. Packet format is the same, but lat and lon are sent as integers representing the value multiplied by 1e6 (ie 12.345678 -> 12345678). The append_coordinate function is replaced with a simpler append_coord_int that just appends the integer value with a decimal point inserted at the correct place in the receiver software. This should be more efficient on the MSP430 while still providing sufficient precision for GPS coordinates.
+// Bitpack GPS data into 14 bytes for LoRa transmission.
+// Layout:
+//   Byte 0:    [team_id(5)][hours_upper(3)]
+//   Byte 1:    [hours_lower(2)][minutes(6)]
+//   Byte 2:    [seconds(6)][fix_ok(1)][isDGPS(1)]
+//   Byte 3:    [num_sats(4)][altitude(19:16)]
+//   Byte 4:    [altitude(15:8)]
+//   Byte 5:    [altitude(7:0)]
+//   Byte 6-9:  latitude  * 1e7  (signed, big-endian)
+//   Byte 10-13: longitude * 1e7 (signed, big-endian)
+void encode_binary(uint8_t out[14], uint8_t team_id, uint8_t hours, uint8_t minutes, uint8_t seconds,
+                   uint8_t fix_ok, uint8_t is_dgps, uint8_t num_sats,
+                   int32_t altitude_dm, int32_t latitude_1e7, int32_t longitude_1e7) {
+
+    team_id &= 0x1F;       // 5 bits
+    hours   &= 0x1F;       // 5 bits
+    minutes &= 0x3F;       // 6 bits
+    seconds &= 0x3F;       // 6 bits
+    num_sats &= 0x0F;      // 4 bits
+
+    // Clamp altitude to 20-bit signed range
+    if (altitude_dm > 524287L)  altitude_dm = 524287L;
+    if (altitude_dm < -524288L) altitude_dm = -524288L;
+
+    uint32_t alt_bits = (uint32_t)altitude_dm & 0xFFFFF; // lower 20 bits
+
+    out[0] = (team_id << 3) | (hours >> 2);
+    out[1] = ((hours & 0x03) << 6) | minutes;
+    out[2] = (seconds << 2) | ((fix_ok & 1) << 1) | (is_dgps & 1);
+    out[3] = (num_sats << 4) | ((alt_bits >> 16) & 0x0F);
+    out[4] = (alt_bits >> 8) & 0xFF;
+    out[5] = alt_bits & 0xFF;
+
+    out[6]  = (latitude_1e7 >> 24) & 0xFF;
+    out[7]  = (latitude_1e7 >> 16) & 0xFF;
+    out[8]  = (latitude_1e7 >> 8)  & 0xFF;
+    out[9]  = latitude_1e7 & 0xFF;
+
+    out[10] = (longitude_1e7 >> 24) & 0xFF;
+    out[11] = (longitude_1e7 >> 16) & 0xFF;
+    out[12] = (longitude_1e7 >> 8)  & 0xFF;
+    out[13] = longitude_1e7 & 0xFF;
+}
+
+// Transmit 14-byte bitpacked GPS payload over LoRa
 void LoRaTX() {
-
-    // // Default hard code tesd
-    // uint8_t data[] = MESSAGE;
-    // while(1){
-    //     radio_transmit_start(data, 5, radioChipSelPin);
-
-    //     while((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
-    // }
-    
-    char data[128];
-    char *p = data;
+    uint8_t packet[14];
 
     // Copy volatile globals safely
     uint8_t sats = gps_sats;
     int32_t lat = latitude_i;
     int32_t lon = longitude_i;
+    uint8_t fix = gps_fix;
+    int32_t alt_dm = gps_altitude_dm;
 
-    // Determine fix type
-    char fix_type = (sats == 0) ? 'N' : 'G';
+    // Clamp satellites to 4-bit max
     if (sats > 15) sats = 15;
 
-    // Build packet: #E 00:00:00 UTC; Y; ZZ; LAT,LON; 0.0m\n
-    append_char(&p, '#');
-    append_char(&p, 'E');
-    append_char(&p, ' ');
+    // Determine fix_ok and isDGPS from GGA fix quality
+    uint8_t fix_ok = (fix >= 1) ? 1 : 0;
+    uint8_t is_dgps = (fix == 2) ? 1 : 0;
 
-    // Time
-    append_str(&p, gps_time);
-    append_str(&p, " UTC; ");
+    // latitude_i and longitude_i are degrees * 1e6, payload needs * 1e7
+    int32_t lat_1e7 = lat * 10L;
+    int32_t lon_1e7 = lon * 10L;
 
-    // Fix type
-    append_char(&p, fix_type);
-    append_str(&p, "; ");
+    encode_binary(packet, TEAM_ID, gps_hours, gps_minutes, gps_seconds,
+                  fix_ok, is_dgps, sats, alt_dm, lat_1e7, lon_1e7);
 
-    // Satellite count (2 digits, zero padded)
-    append_uint_pad(&p, sats, 2);
-    append_str(&p, "; ");
-
-    // Coordinates
-    if (sats > 0) {
-        append_coord_int(&p, lat);
-        append_char(&p, ',');
-        append_coord_int(&p, lon);
-    } else {
-        append_str(&p, "0.000000,0.000000");
-    }
-
-    // Altitude placeholder
-    append_str(&p, "; 0.0m\n");
-
-    // Null terminate
-    *p = '\0';
-
-    // Transmit
-    uint16_t len = (uint16_t)(p - data);
-    radio_transmit_start((uint8_t*)data, len, radioChipSelPin);
+    radio_transmit_start(packet, 14, radioChipSelPin);
     while ((radio_transmit_is_complete(radioChipSelPin)) != TX_OK);
 }
 
@@ -1668,36 +1721,33 @@ int main(void) {
     
     InitClock16MHz();                   // Init 16Mhz CLK
     Software_Trim();                    // Compensate Software Dift
-
-    //InitOnboardLEDS(); // For MCU V2
-    // Init LEDs
-    P1DIR |= RED_LED; // Equivalent of P1DIR |= BIT0; due to the #DEFINE at the top of the program
-    P6DIR |= GREEN_LED;
-
-    // Turn LEDs off.
-    P1OUT &= ~RED_LED;
-    P6OUT &= ~GREEN_LED;
     
     //InitGPIO();                         // Init all GPIO
-    ConfigBackgroundTimer();
-    InitADCRef();
-    InitADCGPIO();                  // P5.0, P1.4, P5.3
-
+    InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
+    InitGPSGPIO();                  // P4.2, P4.3
 
     gpioUnlock();                       // Unlock GPIO
 
-    //ConfigPeripheral();
-    ConfigADC();
-    
-    
+    ConfigPeripheral();
+    spi_B1_init();          // "ConfigLoRaSPI"
+    lora_configure(
+            BANDWIDTH125K,              // 125 khz
+            CODINGRATE4_5,              // Coding rate 4/5
+            CRC_ENABLE,                 // Enable CRC
+            EXPLICIT_HEADER_MODE,       // Explicit header
+            POLARITY_NORMAL_MODE,       // Normal IQ
+            PREAMBLE_LENGTH,            // Preamble 8
+            SPREADINGFACTOR256,         // SF8
+            SYNC_WORD_RESET,            // 0x12
+            radioChipSelPin
+    );
+    ConfigGPSUART();    
     __enable_interrupt();               // Enable Interrupts
     
     //ConfigBMPI2C();
     //CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
     //ConfigACCLI2C();
 
-    uint16_t chamber_temperature;
-    uint16_t battery_temperature;
 
     while(1){
         //ProcessBMPDataI2C();       // Read sensors 
@@ -1705,17 +1755,7 @@ int main(void) {
         //RunStateBehaviour();
 
         // LoRa + GPS Testing
-        //TransmitGPS();
-
-        // ADC real-time testing
-        battery_temperature = GetBatteryTemp();
-
-        if (battery_temperature > 28){
-            P1OUT |= BIT0;       // Turn LED ON when temp > 30C
-        } else {
-            P1OUT &= ~BIT0;      // Turn LED OFF otherwise
-        }
-        __delay_cycles(4000000);
+        TransmitGPS();
     }
 
 }
