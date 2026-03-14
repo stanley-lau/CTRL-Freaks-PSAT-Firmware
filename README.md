@@ -8,7 +8,7 @@ This repository contains the firmware for the on-board flight computer developed
 - Sensor interfaces:  
   - **BMP390L** – Barometric pressure sensor  
   - **ICM-42670-P** – 6-axis IMU (accelerometer + gyroscope)  
-- Monitors multiple analog channels for:  
+- Monitors multiple analog channels for high-current plume mechanism:  
   - Temperature  
   - Current  
 - Communication with **beacon board** for:  
