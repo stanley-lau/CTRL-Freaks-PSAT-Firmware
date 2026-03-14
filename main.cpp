@@ -46,8 +46,8 @@
 
 // Threshold values based on testing and material properties. 
 #define CURRENT_MAX 6.8   // Max current in Amps
-#define BATTERY_MAX 60     // Max temperature in Celsius
-#define CHAMBER_MAX 200
+#define BATTERY_MAX 28     // Max temperature in Celsius
+#define CHAMBER_MAX 28
 
 #define R_SENSE 0.1       // Shunt resistor in Ohms
 
@@ -1610,8 +1610,35 @@ void RecoveryMode(void) {
 }
 
 // ==================== Recovery V2 ============================//
-void RecoveryMode(void){
 
+bool recovery_done = false; 
+void RecoveryV2(void) {
+    for (uint8_t i = 1; i <= 10; i++) {
+        start_delay_seconds(5); 
+        EnableRegulator();
+        SetCoilPWM(100); 
+        //EnableLED(LANDED_LED); 
+        
+        
+        while (!timer_expired) {
+        }
+        
+
+        timer_expired = 0; 
+
+        SetCoilPWM(0);
+        DisableRegulator(); 
+
+        start_delay_seconds(55); 
+
+        while (!timer_expired) {
+            TransmitGPS(); 
+        }
+
+        timer_expired = 0;
+    }
+
+    recovery_done = true; 
 }
 
 
@@ -1654,12 +1681,12 @@ void DisableLED(LED Onboard_LED) {
 // InitGPIO() initialises all GPIO pins
 void InitGPIO() {
     InitCoilGPIO();                 // P5.1
-    InitFanGPIO();                  // P6.1
+    //InitFanGPIO();                  // P6.1
     InitADCRef();
     InitADCGPIO();                  // P5.0, P1.4, P5.3
     InitRegulatorGPIO();            // P3.1 P3.2
 
-    InitSensorsGPIO();
+    // InitSensorsGPIO();
     
     InitLoRaGPIO();                 // P4.4 (CS), SPI pins initialised in spi_b1_init(), should be fine.
     InitGPSGPIO();                  // P4.2, P4.3
@@ -1670,10 +1697,10 @@ void InitGPIO() {
 // ConfigPeripheral() configures all peripherals such as timers, clocks, modules
 void ConfigPeripheral() { 
     ConfigCoilPWM();
-    ConfigFanPWM();
+    // ConfigFanPWM();
     ConfigADC();
     
-    ConfigSensorsI2C();
+    // ConfigSensorsI2C();
 
     ConfigBackgroundTimer();
     spi_B1_init();          // "ConfigLoRaSPI"
@@ -1722,7 +1749,6 @@ void RunStateBehaviour() {
     }
 }
 // ==================== Main Flight Loop (Start) =========================//
-
 int main(void) {
     
     WDTCTL = WDTPW | WDTHOLD;           // Stop Watchdog Timer
@@ -1736,33 +1762,21 @@ int main(void) {
 
     ConfigPeripheral(); 
     __enable_interrupt();               // Enable Interrupts
-    
-    //ConfigBMPI2C();
-    //CalibrateBMPI2C(&ground_pressure_i2c, &initial_altitude_i2c);    // Averaging samples pre-flight to calculate initial altitude 
-    //ConfigACCLI2C();
 
+    EnableLED(LANDED_LED);
 
-    // while(1){
-    //     //ProcessBMPDataI2C();       // Read sensors 
-    //     //UpdateFlightStateI2C();    // Update state 
-    //     //RunStateBehaviour();
-
-    //     // LoRa + GPS Testing
-    //     TransmitGPS();
-    // }
-
-    start_delay_seconds(120);   // start 2min timer
+    start_delay_seconds(2700);   // start 30 minutes timer
 
     while (1){
-        if (timer_expired){
-            //timer_expired = 0;
-            // do the thing after 10 minutes
+        if (timer_expired) {
             EnableLED(FLIGHT_LED);
+            if (!recovery_done){
+                RecoveryV2();
+            }
         } else {
             TransmitGPS();
         }
     }
-
 }
 
 // ==================== Main Flight Loop (END) =========================//
