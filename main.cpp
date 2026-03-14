@@ -1558,13 +1558,6 @@ void InitOnboardLEDS() {
     P2OUT &= ~BIT0;
     P2OUT &= ~BIT1;
     P2OUT &= ~BIT2;
-
-    /*
-    // To turn on the LEDs
-    P2OUT |= BIT0;
-    P2OUT |= BIT1;
-    P2OUT |= BIT2;
-    */
 }
 
 enum LED {
@@ -1626,7 +1619,6 @@ void ConfigPeripheral() {
 }
 
 // ==================== Run State Behaviour =========================//
-// Need to define recovery_active. Where is this happening?
 void RunStateBehaviour() {
     switch (current_flight_state) {
         case PREFLIGHT:
