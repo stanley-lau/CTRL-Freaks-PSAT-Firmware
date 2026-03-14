@@ -73,9 +73,6 @@ __interrupt void ADC_ISR(void) {
     }
 }
 
-// With the intention to tidy up the architecture main() should follow: InitGPIOs --> Unlock GPIO (ONCE) --> Configure Peripheral --> while(1) flightloop
-
-
 
 // ==================== Coil PWM =========================//
 // Initialise and config coil PWM for port 5.1 / timer 2.2
@@ -1023,78 +1020,6 @@ static inline bool is_gngga(const char *s) {
             s[5] == 'A');
 }
 
-/* NOT needed for working LoRa
-double nmea_to_decimal(double coord, char hemi) {
-    int deg = (int)(coord / 100.0);
-    double min = coord - (deg * 100.0);
-    double dec = deg + min / 60.0;
-
-    if (hemi == 'S' || hemi == 'W')
-        dec = -dec;
-
-    return dec;
-}
-
-void parse_gngga(char *line) {
-
-    char *token;
-    uint8_t field = 0;
-
-    double lat_raw = 0.0;
-    double lon_raw = 0.0;
-    char ns = 0, ew = 0;
-    uint8_t fix = 0;
-    uint8_t sats = 0;
-
-    // Seperate sentence
-    token = strtok(line, ",");
-
-    // Locate relevant sections of GNNGA sentence
-    while (token) {
-        field++;
-
-        if (field == 2) {
-            // Parse time field (hhmmss.ss)
-            int hh = 0, mm = 0, ss = 0;
-            if (strlen(token) >= 6) {
-                hh = (token[0] - '0') * 10 + (token[1] - '0');
-                mm = (token[2] - '0') * 10 + (token[3] - '0');
-                ss = (token[4] - '0') * 10 + (token[5] - '0');
-                // Format as HH:MM:SS
-                gps_time[0] = '0' + (hh / 10);
-                gps_time[1] = '0' + (hh % 10);
-                gps_time[2] = ':';
-                gps_time[3] = '0' + (mm / 10);
-                gps_time[4] = '0' + (mm % 10);
-                gps_time[5] = ':';
-                gps_time[6] = '0' + (ss / 10);
-                gps_time[7] = '0' + (ss % 10);
-                gps_time[8] = '\0';
-            } else {
-                strcpy(gps_time, "00:00:00");
-            }
-        }
-        else if (field == 3) lat_raw = atof(token);
-        else if (field == 4) ns = token[0];
-        else if (field == 5) lon_raw = atof(token);
-        else if (field == 6) ew = token[0];
-        else if (field == 7) fix = atoi(token);
-        else if (field == 8) sats = atoi(token);
-
-        token = strtok(NULL, ",");
-    }
-
-    //if (fix == 0)return;   // no GPS fix
-
-    double lat = nmea_to_decimal(lat_raw, ns);
-    double lon = nmea_to_decimal(lon_raw, ew);
-
-    latitude = lat;
-    longitude = lon;
-    gps_sats = sats;
-}
-*/
-
 // append_char() appends a character to the current position of a character pointer and then advances the pointer to the next position.
 static inline void append_char(char **p, char c) {
     **p = c; (*p)++;
@@ -1163,9 +1088,6 @@ static void append_coordinate(char **p, double val, uint8_t frac_digits) {
     // Append fractional part with leading zeros
     append_uint_pad(p, (uint16_t)frac, frac_digits);
 }
-
-// ==================== OPUS 4.6 ==================== ///
-// INT Approach
 
 // Store coordinates as integers (degrees * 1,000,000) to avoid float precision loss
 volatile int32_t latitude_i = 0;   // -36607300 means -36.607300
@@ -1241,13 +1163,6 @@ static int32_t parse_nmea_to_int(const char *token) {
     // minutes_int is whole minutes, frac_part is fractional minutes * 10^5
     int32_t total_min_scaled = (int32_t)minutes_int * 100000L + frac_part;
 
-    // Convert minutes to degrees:
-    // degrees_frac = total_min_scaled / 60
-    // This gives us fractional degrees * 100000 / 60
-    // We want result in millionths of a degree (10^6)
-    // result = degrees * 1000000 + (total_min_scaled * 10) / 60
-    // Because total_min_scaled is minutes * 10^5, multiply by 10 to get * 10^6, then /60
-
     int32_t frac_deg = (total_min_scaled * 10L + 30L) / 60L;  // +30 for rounding
 
     return degrees * 1000000L + frac_deg;
@@ -1270,15 +1185,6 @@ void parse_gngga(char *line) {
 
         if (field == 2) {
             if (strlen(token) >= 6) {
-                // gps_time[0] = token[0];
-                // gps_time[1] = token[1];
-                // gps_time[2] = ':';
-                // gps_time[3] = token[2];
-                // gps_time[4] = token[3];
-                // gps_time[5] = ':';
-                // gps_time[6] = token[4];
-                // gps_time[7] = token[5];
-                // gps_time[8] = '\0';
 
                 // below code is more modular in terms of time formatting:
                 int hh = (token[0] - '0') * 10 + (token[1] - '0');
@@ -1349,7 +1255,6 @@ static void append_coord_int(char **p, int32_t val) {
     // Append frac with leading zeros (always 6 digits)
     append_uint_pad(p, (uint32_t)frac, 6);
 }
-// ====================  OPUS 4.6 ====================  ///
 
 // ==================== LoRa =========================//
 /*
